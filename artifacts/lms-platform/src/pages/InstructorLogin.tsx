@@ -1,0 +1,74 @@
+import { useState } from "react";
+import { useLocation } from "wouter";
+import { useInstructorAuth } from "@/lib/instructorAuth";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { GraduationCap, Lock, Mail, Loader2 } from "lucide-react";
+
+export default function InstructorLogin() {
+  const { login } = useInstructorAuth();
+  const [, navigate] = useLocation();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    const ok = await login(email, password);
+    setLoading(false);
+    if (!ok) setError("الإيميل أو كلمة السر غلط");
+    else navigate("/instructor");
+  };
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4" dir="rtl">
+      <div className="w-full max-w-sm">
+        <div className="bg-card border border-card-border rounded-2xl p-8 shadow-sm">
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-12 h-12 rounded-xl bg-primary flex items-center justify-center mb-4">
+              <GraduationCap className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold">بوابة المدربين</h1>
+            <p className="text-muted-foreground text-sm mt-1">سجّل دخولك للوحة التحكم</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium block mb-1.5">الإيميل</label>
+              <div className="relative">
+                <Mail className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                  className="pr-9" placeholder="instructor@academy.com" required
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium block mb-1.5">كلمة السر</label>
+              <div className="relative">
+                <Lock className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                  className="pr-9" placeholder="••••••••" required
+                />
+              </div>
+            </div>
+
+            {error && (
+              <div className="bg-destructive/10 text-destructive text-sm rounded-lg px-3 py-2 text-center">
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? <><Loader2 className="w-4 h-4 ml-2 animate-spin" /> جاري الدخول...</> : "دخول"}
+            </Button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
