@@ -1,12 +1,23 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { studentsTable, paymentsTable, coursesTable, activityTable } from "@workspace/db";
-import { sql } from "drizzle-orm";
+import { studentsTable, paymentsTable, coursesTable, activityTable, tenantsTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 
 const router = Router();
 
+async function getDefaultTenantId(): Promise<number> {
+  const [tenant] = await db
+    .select()
+    .from(tenantsTable)
+    .where(eq(tenantsTable.slug, "default"))
+    .limit(1);
+  if (!tenant) throw new Error("Default tenant not found. Run the migration first.");
+  return tenant.id;
+}
+
 router.get("/summary", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
@@ -15,11 +26,13 @@ router.get("/summary", async (req, res) => {
         total: sql<number>`count(*)::int`,
         active: sql<number>`count(*) filter (where ${studentsTable.status} = 'active')::int`,
       })
-      .from(studentsTable);
+      .from(studentsTable)
+      .where(eq(studentsTable.tenantId, tenantId));
 
     const [courseStats] = await db
       .select({ total: sql<number>`count(*)::int` })
-      .from(coursesTable);
+      .from(coursesTable)
+      .where(eq(coursesTable.tenantId, tenantId));
 
     const [revenueStats] = await db
       .select({
@@ -27,19 +40,23 @@ router.get("/summary", async (req, res) => {
         pending: sql<number>`coalesce(sum(${paymentsTable.amount}::numeric) filter (where ${paymentsTable.status} = 'pending'), 0)`,
         thisMonth: sql<number>`coalesce(sum(${paymentsTable.amount}::numeric) filter (where (${paymentsTable.status} = 'completed' or ${paymentsTable.status} = 'approved') and ${paymentsTable.createdAt} >= ${startOfMonth}), 0)`,
       })
-      .from(paymentsTable);
+      .from(paymentsTable)
+      .innerJoin(studentsTable, eq(paymentsTable.studentId, studentsTable.id))
+      .where(eq(studentsTable.tenantId, tenantId));
 
     const [enrollmentStats] = await db
       .select({
         thisMonth: sql<number>`count(*) filter (where ${studentsTable.enrolledAt} >= ${startOfMonth})::int`,
       })
-      .from(studentsTable);
+      .from(studentsTable)
+      .where(eq(studentsTable.tenantId, tenantId));
 
     const [progressStats] = await db
       .select({
         avg: sql<number>`coalesce(avg(${studentsTable.progress}::numeric), 0)`,
       })
-      .from(studentsTable);
+      .from(studentsTable)
+      .where(eq(studentsTable.tenantId, tenantId));
 
     res.json({
       totalStudents: studentStats?.total ?? 0,
@@ -59,9 +76,11 @@ router.get("/summary", async (req, res) => {
 
 router.get("/recent-activity", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const activities = await db
       .select()
       .from(activityTable)
+      .where(eq(activityTable.tenantId, tenantId))
       .orderBy(sql`${activityTable.createdAt} desc`)
       .limit(20);
 
@@ -82,10 +101,9 @@ router.get("/recent-activity", async (req, res) => {
   }
 });
 
-// Feature 2: Monthly Revenue Chart — Real Data
-// GET /api/dashboard/monthly-revenue
 router.get("/monthly-revenue", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const now = new Date();
     const months: { month: string; revenue: number }[] = [];
 
@@ -99,7 +117,9 @@ router.get("/monthly-revenue", async (req, res) => {
         .select({
           revenue: sql<number>`coalesce(sum(${paymentsTable.amount}::numeric) filter (where (${paymentsTable.status} = 'completed' or ${paymentsTable.status} = 'approved') and ${paymentsTable.createdAt} >= ${start} and ${paymentsTable.createdAt} < ${end}), 0)`,
         })
-        .from(paymentsTable);
+        .from(paymentsTable)
+        .innerJoin(studentsTable, eq(paymentsTable.studentId, studentsTable.id))
+        .where(eq(studentsTable.tenantId, tenantId));
 
       months.push({ month: monthLabel, revenue: Number(row?.revenue ?? 0) });
     }

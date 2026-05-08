@@ -6,7 +6,7 @@ import { I18nProvider } from "@/lib/i18n";
 import { Layout } from "@/components/layout/Layout";
 import { usePixels } from "@/hooks/usePixels";
 import { AdminAuthProvider, useAdminAuth } from "@/lib/adminAuth";
-import { TenantProvider } from "@/hooks/useTenant";
+import { TenantProvider, useTenant } from "@/hooks/useTenant";
 import Dashboard from "@/pages/Dashboard";
 import Courses from "@/pages/Courses";
 import CourseDetail from "@/pages/CourseDetail";
@@ -29,6 +29,18 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
 });
 
+function AcademyNotFound() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background text-center px-4">
+      <div className="text-6xl font-bold text-muted-foreground mb-4">404</div>
+      <h1 className="text-2xl font-semibold mb-2">Academy Not Found</h1>
+      <p className="text-muted-foreground max-w-sm">
+        The academy you're looking for doesn't exist or has not been registered yet.
+      </p>
+    </div>
+  );
+}
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAdminAuth();
   const [, navigate] = useLocation();
@@ -45,6 +57,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) return null;
   return <>{children}</>;
 }
+
 function InstructorAuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useInstructorAuth();
   const [, navigate] = useLocation();
@@ -61,8 +74,6 @@ function InstructorAuthGuard({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) return null;
   return <>{children}</>;
 }
-
-
 
 function AppRoutes() {
   usePixels();
@@ -99,20 +110,44 @@ function AppRoutes() {
   );
 }
 
+/**
+ * Inner wrapper that has access to TenantProvider context.
+ * Shows a 404 page if the academy slug/domain is unknown.
+ */
+function AppWithTenantGuard() {
+  const { isLoading, notFound } = useTenant();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  if (notFound) {
+    return <AcademyNotFound />;
+  }
+
+  return (
+    <InstructorAuthProvider>
+      <AdminAuthProvider>
+        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+          <AppRoutes />
+        </WouterRouter>
+        <Toaster richColors position="top-right" />
+      </AdminAuthProvider>
+    </InstructorAuthProvider>
+  );
+}
+
 function App() {
   return (
     <TenantProvider>
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
         <QueryClientProvider client={queryClient}>
           <I18nProvider>
-            <InstructorAuthProvider>
-              <AdminAuthProvider>
-                <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-                  <AppRoutes />
-                </WouterRouter>
-                <Toaster richColors position="top-right" />
-              </AdminAuthProvider>
-            </InstructorAuthProvider>
+            <AppWithTenantGuard />
           </I18nProvider>
         </QueryClientProvider>
       </ThemeProvider>

@@ -17,7 +17,7 @@ import certificatesRouter from "./certificates";
 import couponsRouter from "./coupons";
 import adminAuthRouter from "./admin-auth";
 import instructorAuthRouter from "./instructor-auth";
-import tenantRouter from "./tenant";
+import {tenantMiddleware} from "./tenant";
 import { requireAdmin, requireInstructor } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
@@ -33,7 +33,7 @@ router.use("/auth", authRouter);
 router.use("/admin-auth", adminAuthRouter);
 
 // Public tenant theme endpoint (called by React frontend on load)
-router.use("/tenant", tenantRouter);
+router.use("/tenant", tenantMiddleware);
 
 
 // Instructor routes

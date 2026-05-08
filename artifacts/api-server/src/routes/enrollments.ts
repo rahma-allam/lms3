@@ -1,9 +1,15 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { enrollmentsTable, studentsTable, coursesTable, activityTable, lessonCompletionsTable, lessonsTable, modulesTable } from "@workspace/db";
+import { enrollmentsTable, studentsTable, coursesTable, activityTable, lessonCompletionsTable, lessonsTable, modulesTable, tenantsTable } from "@workspace/db";
 import { eq, sql, and } from "drizzle-orm";
 
 const router = Router();
+
+async function getDefaultTenantId(): Promise<number> {
+  const [tenant] = await db.select().from(tenantsTable).where(eq(tenantsTable.slug, "default")).limit(1);
+  if (!tenant) throw new Error("Default tenant not found.");
+  return tenant.id;
+}
 
 async function getProgress(studentId: number, courseId: number): Promise<number> {
   const [total] = await db
@@ -27,9 +33,15 @@ async function getProgress(studentId: number, courseId: number): Promise<number>
 
 router.get("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const { studentId, courseId } = req.query;
 
     if (studentId) {
+      // Verify student belongs to tenant
+      const [student] = await db.select().from(studentsTable)
+        .where(and(eq(studentsTable.id, parseInt(studentId as string)), eq(studentsTable.tenantId, tenantId)));
+      if (!student) return res.status(404).json({ error: "Student not found" });
+
       const rows = await db
         .select({
           enrollment: enrollmentsTable,
@@ -40,7 +52,10 @@ router.get("/", async (req, res) => {
         })
         .from(enrollmentsTable)
         .innerJoin(coursesTable, eq(enrollmentsTable.courseId, coursesTable.id))
-        .where(eq(enrollmentsTable.studentId, parseInt(studentId as string)));
+        .where(and(
+          eq(enrollmentsTable.studentId, parseInt(studentId as string)),
+          eq(coursesTable.tenantId, tenantId)
+        ));
 
       const enriched = await Promise.all(
         rows.map(async (r) => ({
@@ -60,6 +75,11 @@ router.get("/", async (req, res) => {
     }
 
     if (courseId) {
+      // Verify course belongs to tenant
+      const [course] = await db.select().from(coursesTable)
+        .where(and(eq(coursesTable.id, parseInt(courseId as string)), eq(coursesTable.tenantId, tenantId)));
+      if (!course) return res.status(404).json({ error: "Course not found" });
+
       const rows = await db
         .select({
           enrollment: enrollmentsTable,
@@ -68,7 +88,10 @@ router.get("/", async (req, res) => {
         })
         .from(enrollmentsTable)
         .innerJoin(studentsTable, eq(enrollmentsTable.studentId, studentsTable.id))
-        .where(eq(enrollmentsTable.courseId, parseInt(courseId as string)));
+        .where(and(
+          eq(enrollmentsTable.courseId, parseInt(courseId as string)),
+          eq(studentsTable.tenantId, tenantId)
+        ));
 
       const enriched = await Promise.all(
         rows.map(async (r) => ({
@@ -93,31 +116,35 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const { studentId, courseId } = req.body;
     if (!studentId || !courseId) return res.status(400).json({ error: "studentId and courseId required" });
 
-    const existing = await db
-      .select()
-      .from(enrollmentsTable)
-      .where(and(eq(enrollmentsTable.studentId, studentId), eq(enrollmentsTable.courseId, courseId)));
+    // Verify both belong to tenant
+    const [student] = await db.select().from(studentsTable)
+      .where(and(eq(studentsTable.id, studentId), eq(studentsTable.tenantId, tenantId)));
+    if (!student) return res.status(404).json({ error: "Student not found" });
 
+    const [course] = await db.select().from(coursesTable)
+      .where(and(eq(coursesTable.id, courseId), eq(coursesTable.tenantId, tenantId)));
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
+    const existing = await db.select().from(enrollmentsTable)
+      .where(and(eq(enrollmentsTable.studentId, studentId), eq(enrollmentsTable.courseId, courseId)));
     if (existing.length > 0) return res.status(409).json({ error: "Already enrolled" });
 
-    const [enrollment] = await db
-      .insert(enrollmentsTable)
+    const [enrollment] = await db.insert(enrollmentsTable)
       .values({ studentId, courseId, status: "active" })
       .returning();
 
     await db.update(studentsTable).set({ courseId }).where(eq(studentsTable.id, studentId));
 
-    const [student] = await db.select({ name: studentsTable.name }).from(studentsTable).where(eq(studentsTable.id, studentId));
-    const [course] = await db.select({ title: coursesTable.title }).from(coursesTable).where(eq(coursesTable.id, courseId));
-
     await db.insert(activityTable).values({
+      tenantId,
       type: "enrollment",
-      description: `${student?.name ?? "Student"} enrolled in ${course?.title ?? "course"}`,
-      studentName: student?.name ?? null,
-      courseName: course?.title ?? null,
+      description: `${student.name} enrolled in ${course.title}`,
+      studentName: student.name,
+      courseName: course.title,
     });
 
     res.status(201).json(enrollment);

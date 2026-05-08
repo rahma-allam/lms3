@@ -1,131 +1,129 @@
-import { Router } from "express";
+import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
-import { tenantsTable, settingsTable } from "@workspace/db";
+import { tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { invalidateTenantCache } from "../middlewares/tenant.js";
-import { requireAdmin } from "../middlewares/auth.js";
 
-const router = Router();
+// Extend Express Request to carry tenant info
+declare global {
+  namespace Express {
+    interface Request {
+      tenantId?: number;
+      tenant?: typeof tenantsTable.$inferSelect;
+    }
+  }
+}
 
-/**
- * GET /api/tenant/theme
- * Public – called by the React frontend to get academy branding.
- * Resolves tenant from the Host header (handled by tenantMiddleware upstream),
- * but also accepts ?slug= for local development.
- */
-router.get("/theme", async (req, res) => {
+// Simple in-memory cache – avoids a DB hit on every request
+const tenantCache = new Map<string, { tenant: typeof tenantsTable.$inferSelect; expiresAt: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHE_SIZE = 1000;
+
+export async function tenantMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const host =
+    (req.headers["x-forwarded-host"] as string) ||
+    (req.headers.host as string) ||
+    "";
+  const hostname = host.split(":")[0] ?? "";
+  const BASE_DOMAIN = process.env.BASE_DOMAIN || "";
+
+  // Dev: allow ?tenant= query param or x-tenant-slug header
+  const isNonProd = process.env.NODE_ENV !== "production";
+  const manualSlug = isNonProd
+    ? (req.query.tenant as string) || (req.headers["x-tenant-slug"] as string)
+    : undefined;
+
+  let lookupKey: string | undefined;
+  let lookupType: "slug" | "customDomain" | undefined;
+
+  if (manualSlug) {
+    lookupKey = manualSlug;
+    lookupType = "slug";
+  } else if (BASE_DOMAIN && hostname.endsWith(`.${BASE_DOMAIN}`)) {
+    lookupKey = hostname.replace(`.${BASE_DOMAIN}`, "");
+    lookupType = "slug";
+  } else if (
+    hostname !== BASE_DOMAIN &&
+    hostname !== `www.${BASE_DOMAIN}` &&
+    hostname !== "localhost" &&
+    !hostname.startsWith("127.") &&
+    hostname !== "" &&
+    hostname !== "0.0.0.0"
+  ) {
+    lookupKey = hostname;
+    lookupType = "customDomain";
+  }
+
+  if (!lookupKey) {
+    return next();
+  }
+
+  // Check cache first
+  const cacheKey = `${lookupType}:${lookupKey}`;
+  const cached = tenantCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    req.tenantId = cached.tenant.id;
+    req.tenant = cached.tenant;
+    return next();
+  }
+
   try {
-    let tenantId = req.tenantId;
+    const condition =
+      lookupType === "slug"
+        ? eq(tenantsTable.slug, lookupKey)
+        : eq(tenantsTable.customDomain, lookupKey);
 
-    // Dev fallback: allow ?slug=ahmed for localhost testing
-    if (!tenantId && req.query.slug) {
-      const [t] = await db
-        .select()
-        .from(tenantsTable)
-        .where(eq(tenantsTable.slug, req.query.slug as string))
-        .limit(1);
-      if (t) tenantId = t.id;
-    }
-
-    if (!tenantId) {
-      return res.status(404).json({ error: "Tenant not resolved" });
-    }
-
-    const [settings] = await db
+    const [tenant] = await db
       .select()
-      .from(settingsTable)
-      .where(eq(settingsTable.tenantId, tenantId))
+      .from(tenantsTable)
+      .where(condition)
       .limit(1);
 
-    const tenant = req.tenant ?? (await db.select().from(tenantsTable).where(eq(tenantsTable.id, tenantId)).limit(1))[0];
+    if (!tenant) {
+      return res.status(404).json({ error: "Academy not found" });
+    }
 
-    return res.json({
-      tenantId,
-      theme: {
-        academyName: settings?.academyName ?? tenant?.name ?? "Academy",
-        academyNameAr: settings?.academyNameAr ?? null,
-        logoUrl: settings?.logoUrl ?? null,
-        defaultLanguage: settings?.defaultLanguage ?? "en",
-        currency: settings?.currency ?? "USD",
-        metaPixelId: settings?.metaPixelId ?? null,
-        googleTagId: settings?.googleTagId ?? null,
-        tiktokPixelId: settings?.tiktokPixelId ?? null,
-        manualPaymentInstructions: settings?.manualPaymentInstructions ?? null,
-      },
-    });
-  } catch (err) {
-    console.error(err);
+    if (tenant.status === "suspended") {
+      return res.status(403).json({
+        error: "Academy suspended",
+        message: "This academy has been suspended. Please contact support.",
+      });
+    }
+
+    const isExpired =
+      tenant.planExpiresAt && tenant.planExpiresAt < new Date();
+    if (isExpired) {
+      return res.status(402).json({
+        error: "Subscription expired",
+        message: "Please renew your subscription to continue.",
+      });
+    }
+
+    if (tenantCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = tenantCache.keys().next().value;
+      if (firstKey) tenantCache.delete(firstKey);
+    }
+    tenantCache.set(cacheKey, { tenant, expiresAt: Date.now() + CACHE_TTL_MS });
+
+    req.tenantId = tenant.id;
+    req.tenant = tenant;
+
+    return next();
+  } catch (error) {
+    console.error("Tenant middleware error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
-});
+}
 
-/**
- * GET /api/tenant/list  (Admin only)
- * Returns all tenants – used by Super Admin dashboard.
- */
-router.get("/list", requireAdmin, async (_req, res) => {
-  try {
-    const tenants = await db.select().from(tenantsTable).orderBy(tenantsTable.createdAt);
-    res.json(tenants);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-/**
- * POST /api/tenant  (Admin only)
- * Create a new tenant/academy.
- */
-router.post("/", requireAdmin, async (req, res) => {
-  try {
-    const { slug, name, customDomain } = req.body;
-    if (!slug || !name) {
-      return res.status(400).json({ error: "slug and name are required" });
+/** Call this after updating a tenant's status/domain to keep the cache fresh */
+export function invalidateTenantCache(tenantId: number) {
+  for (const [key, value] of tenantCache.entries()) {
+    if (value.tenant.id === tenantId) {
+      tenantCache.delete(key);
     }
-    const [tenant] = await db
-      .insert(tenantsTable)
-      .values({ slug, name, customDomain: customDomain ?? null })
-      .returning();
-    res.status(201).json(tenant);
-  } catch (err: any) {
-    if (err?.code === "23505") {
-      return res.status(409).json({ error: "Slug or custom domain already exists" });
-    }
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
   }
-});
+}
 
-/**
- * PATCH /api/tenant/:id/status  (Admin only)
- * Activate, suspend, or update subscription expiry.
- */
-router.patch("/:id/status", requireAdmin, async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { status, planExpiresAt } = req.body;
-
-    const updates: Record<string, any> = {};
-    if (status) updates.status = status;
-    if (planExpiresAt) updates.planExpiresAt = new Date(planExpiresAt);
-
-    const [updated] = await db
-      .update(tenantsTable)
-      .set(updates)
-      .where(eq(tenantsTable.id, id))
-      .returning();
-
-    if (!updated) return res.status(404).json({ error: "Tenant not found" });
-
-    // Flush cache so next request picks up new status immediately
-    invalidateTenantCache(id);
-
-    res.json(updated);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-export default router;

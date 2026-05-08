@@ -1,7 +1,9 @@
-import { pgTable, serial, text } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { tenantsTable } from "./tenants";
 
 export const academyProfileTable = pgTable("academy_profile", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenant_id").unique().references(() => tenantsTable.id, { onDelete: "cascade" }),
   aboutEn: text("about_en"),
   aboutAr: text("about_ar"),
   phone: text("phone"),

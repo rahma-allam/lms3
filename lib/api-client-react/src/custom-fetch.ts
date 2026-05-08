@@ -18,28 +18,10 @@ const DEFAULT_JSON_ACCEPT = "application/json, application/problem+json";
 let _baseUrl: string | null = null;
 let _authTokenGetter: AuthTokenGetter | null = null;
 
-/**
- * Set a base URL that is prepended to every relative request URL
- * (i.e. paths that start with `/`).
- *
- * Useful for Expo bundles that need to call a remote API server.
- * Pass `null` to clear the base URL.
- */
 export function setBaseUrl(url: string | null): void {
   _baseUrl = url ? url.replace(/\/+$/, "") : null;
 }
 
-/**
- * Register a getter that supplies a bearer auth token.  Before every fetch
- * the getter is invoked; when it returns a non-null string, an
- * `Authorization: Bearer <token>` header is attached to the request.
- *
- * Useful for Expo bundles making token-gated API calls.
- * Pass `null` to clear the getter.
- *
- * NOTE: This function should never be used in web applications where session
- * token cookies are automatically associated with API calls by the browser.
- */
 export function setAuthTokenGetter(getter: AuthTokenGetter | null): void {
   _authTokenGetter = getter;
 }
@@ -54,16 +36,20 @@ function resolveMethod(input: RequestInfo | URL, explicitMethod?: string): strin
   return "GET";
 }
 
-// Use loose check for URL — some runtimes (e.g. React Native) polyfill URL
-// differently, so `instanceof URL` can fail.
 function isUrl(input: RequestInfo | URL): input is URL {
   return typeof URL !== "undefined" && input instanceof URL;
 }
 
-// بعد
-function getTenantSlugFromPage(): string | null {
+/**
+ * Get tenant slug from URL search params (?tenant=xxx) for dev,
+ * or from a stored value for production.
+ */
+function getTenantSlug(): string | null {
   if (typeof window === "undefined") return null;
-  return new URLSearchParams(window.location.search).get("tenant");
+  const fromQuery = new URLSearchParams(window.location.search).get("tenant");
+  if (fromQuery) return fromQuery;
+  // In production, read from a global set by TenantProvider
+  return (window as any).__TENANT_SLUG__ ?? null;
 }
 
 function applyBaseUrl(input: RequestInfo | URL): RequestInfo | URL {
@@ -75,22 +61,6 @@ function applyBaseUrl(input: RequestInfo | URL): RequestInfo | URL {
   if (typeof input === "string") return absolute;
   if (isUrl(input)) return new URL(absolute);
   return new Request(absolute, input as Request);
-}
-
-function applyTenantSlug(input: RequestInfo | URL): RequestInfo | URL {
-  const slug = getTenantSlugFromPage();
-  if (!slug) return input;
-
-  const url = resolveUrl(input);
-  // بس للـ storefront routes
-  if (!url.includes("/api/storefront")) return input;
-
-  const separator = url.includes("?") ? "&" : "?";
-  const newUrl = `${url}${separator}tenant=${encodeURIComponent(slug)}`;
-
-  if (typeof input === "string") return newUrl;
-  if (isUrl(input)) return new URL(newUrl);
-  return new Request(newUrl, input as Request);
 }
 
 function resolveUrl(input: RequestInfo | URL): string {
@@ -132,12 +102,6 @@ function isTextMediaType(mediaType: string | null): boolean {
   );
 }
 
-// Use strict equality: in browsers, `response.body` is `null` when the
-// response genuinely has no content.  In React Native, `response.body` is
-// always `undefined` because the ReadableStream API is not implemented —
-// even when the response carries a full payload readable via `.text()` or
-// `.json()`.  Loose equality (`== null`) matches both `null` and `undefined`,
-// which causes every React Native response to be treated as empty.
 function hasNoBody(response: Response, method: string): boolean {
   if (method === "HEAD") return true;
   if (NO_BODY_STATUS.has(response.status)) return true;
@@ -279,7 +243,6 @@ async function parseErrorBody(response: Response, method: string): Promise<unkno
 
   const mediaType = getMediaType(response.headers);
 
-  // Fall back to text when blob() is unavailable (e.g. some React Native builds).
   if (mediaType && !isJsonMediaType(mediaType) && !isTextMediaType(mediaType)) {
     return typeof response.blob === "function" ? response.blob() : response.text();
   }
@@ -336,7 +299,7 @@ async function parseSuccessBody(
       if (typeof response.blob !== "function") {
         throw new TypeError(
           "Blob responses are not supported in this runtime. " +
-            "Use responseType \"json\" or \"text\" instead.",
+            'Use responseType "json" or "text" instead.',
         );
       }
       return response.blob();
@@ -348,7 +311,6 @@ export async function customFetch<T = unknown>(
   options: CustomFetchOptions = {},
 ): Promise<T> {
   input = applyBaseUrl(input);
-  input = applyTenantSlug(input);
   const { responseType = "auto", headers: headersInit, ...init } = options;
 
   const method = resolveMethod(input, init.method);
@@ -358,6 +320,12 @@ export async function customFetch<T = unknown>(
   }
 
   const headers = mergeHeaders(isRequest(input) ? input.headers : undefined, headersInit);
+
+  // Inject tenant slug header on every API request
+  const tenantSlug = getTenantSlug();
+  if (tenantSlug && !headers.has("x-tenant-slug")) {
+    headers.set("x-tenant-slug", tenantSlug);
+  }
 
   if (
     typeof init.body === "string" &&
@@ -371,8 +339,6 @@ export async function customFetch<T = unknown>(
     headers.set("accept", DEFAULT_JSON_ACCEPT);
   }
 
-  // Attach bearer token when an auth getter is configured and no
-  // Authorization header has been explicitly provided.
   if (_authTokenGetter && !headers.has("authorization")) {
     const token = await _authTokenGetter();
     if (token) {

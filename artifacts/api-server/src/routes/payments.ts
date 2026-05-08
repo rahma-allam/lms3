@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { paymentsTable, studentsTable, coursesTable, activityTable, settingsTable, enrollmentsTable } from "@workspace/db";
+import { paymentsTable, studentsTable, coursesTable, activityTable, settingsTable, enrollmentsTable, tenantsTable } from "@workspace/db";
 import { eq, sql, and } from "drizzle-orm";
 import { CreatePaymentBody } from "@workspace/api-zod";
 import crypto from "crypto";
@@ -24,16 +24,27 @@ const receiptStorage = multer.diskStorage({
 });
 const uploadReceipt = multer({
   storage: receiptStorage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/")) cb(null, true);
     else cb(new Error("Image files only"));
   },
 });
 
+async function getDefaultTenantId(): Promise<number> {
+  const [tenant] = await db
+    .select()
+    .from(tenantsTable)
+    .where(eq(tenantsTable.slug, "default"))
+    .limit(1);
+  if (!tenant) throw new Error("Default tenant not found.");
+  return tenant.id;
+}
+
 // 1. ملخص المدفوعات (Summary)
 router.get("/summary", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -49,7 +60,9 @@ router.get("/summary", async (req, res) => {
         completedCount: sql<number>`count(*) filter (where ${paymentsTable.status} = 'completed' or ${paymentsTable.status} = 'approved')::int`,
         pendingCount: sql<number>`count(*) filter (where ${paymentsTable.status} = 'pending')::int`,
       })
-      .from(paymentsTable);
+      .from(paymentsTable)
+      .innerJoin(studentsTable, eq(paymentsTable.studentId, studentsTable.id))
+      .where(eq(studentsTable.tenantId, tenantId));
 
     res.json({
       totalRevenue: Number(stats?.total ?? 0),
@@ -69,9 +82,10 @@ router.get("/summary", async (req, res) => {
 // 2. قائمة المدفوعات
 router.get("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const { status, studentId } = req.query;
 
-    let query = db
+    let payments = await db
       .select({
         payment: paymentsTable,
         studentName: studentsTable.name,
@@ -80,9 +94,8 @@ router.get("/", async (req, res) => {
       .from(paymentsTable)
       .leftJoin(studentsTable, eq(paymentsTable.studentId, studentsTable.id))
       .leftJoin(coursesTable, eq(paymentsTable.courseId, coursesTable.id))
+      .where(eq(studentsTable.tenantId, tenantId))
       .orderBy(sql`${paymentsTable.createdAt} desc`);
-
-    let payments = await query;
 
     if (status) payments = payments.filter((p) => p.payment.status === status);
     if (studentId) payments = payments.filter((p) => p.payment.studentId === parseInt(studentId as string));
@@ -109,9 +122,10 @@ router.get("/", async (req, res) => {
   }
 });
 
-// 3. إنشاء عملية دفع جديدة (يدوي - حالة pending)
+// 3. إنشاء عملية دفع جديدة
 router.post("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const parsed = CreatePaymentBody.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.format() });
@@ -119,6 +133,13 @@ router.post("/", async (req, res) => {
 
     const { studentId, courseId, amount, status, method, notes, paidAt } = parsed.data;
     const receiptUrl = (req.body as any).receiptUrl ?? null;
+
+    // Verify student belongs to this tenant
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, studentId), eq(studentsTable.tenantId, tenantId)));
+    if (!student) return res.status(404).json({ error: "Student not found" });
 
     const [payment] = await db
       .insert(paymentsTable)
@@ -134,20 +155,18 @@ router.post("/", async (req, res) => {
       })
       .returning();
 
-    const [student] = await db.select({ name: studentsTable.name, email: studentsTable.email, phone: studentsTable.phone }).from(studentsTable).where(eq(studentsTable.id, studentId));
-
-    // إذا تم الدفع بنجاح فوراً (مثلاً بطاقة ائتمانية)
     if (status === "completed" || status === "approved") {
       await db.update(studentsTable).set({ paymentStatus: "paid" }).where(eq(studentsTable.id, studentId));
 
       await db.insert(activityTable).values({
+        tenantId,
         type: "payment",
-        description: `Payment of $${amount} received from ${student?.name ?? "student"}`,
-        studentName: student?.name ?? null,
+        description: `Payment of $${amount} received from ${student.name}`,
+        studentName: student.name,
         amount: String(amount),
       });
 
-      const [settingsRow] = await db.select().from(settingsTable).limit(1);
+      const [settingsRow] = await db.select().from(settingsTable).where(eq(settingsTable.tenantId, tenantId)).limit(1);
       if (settingsRow) {
         firePurchaseConversions(
           settingsRow,
@@ -155,8 +174,8 @@ router.post("/", async (req, res) => {
             orderId: String(payment!.id),
             value: amount,
             currency: settingsRow.currency,
-            email: student?.email,
-            phone: student?.phone,
+            email: student.email,
+            phone: student.phone,
             clientIp: req.ip,
             userAgent: req.headers["user-agent"],
           },
@@ -168,7 +187,7 @@ router.post("/", async (req, res) => {
     res.status(201).json({
       ...payment,
       amount: Number(payment!.amount),
-      studentName: student?.name ?? null
+      studentName: student.name,
     });
   } catch (err) {
     req.log.error({ err }, "Error creating payment");
@@ -176,22 +195,31 @@ router.post("/", async (req, res) => {
   }
 });
 
-// 4. دفع أونلاين (يتم تلقائياً)
-// POST /api/payments/online
+// 4. دفع أونلاين
 router.post("/online", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const { studentId, courseId, amount } = req.body;
 
     if (!studentId || !amount) {
       return res.status(400).json({ error: "studentId and amount are required" });
     }
 
-    // محاكاة الدفع الناجح
+    const sid = parseInt(studentId);
+    const cid = courseId ? parseInt(courseId) : null;
+
+    // Verify student belongs to this tenant
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, sid), eq(studentsTable.tenantId, tenantId)));
+    if (!student) return res.status(404).json({ error: "Student not found" });
+
     const [payment] = await db
       .insert(paymentsTable)
       .values({
-        studentId: parseInt(studentId),
-        courseId: courseId ? parseInt(courseId) : null,
+        studentId: sid,
+        courseId: cid,
         amount: String(amount),
         status: "completed",
         method: "online",
@@ -199,30 +227,26 @@ router.post("/online", async (req, res) => {
       })
       .returning();
 
-    // تفعيل الكورس للطالب فوراً
     await db.update(studentsTable)
-      .set({ paymentStatus: "paid", status: "active", ...(courseId ? { courseId: parseInt(courseId) } : {}) })
-      .where(eq(studentsTable.id, parseInt(studentId)));
+      .set({ paymentStatus: "paid", status: "active", ...(cid ? { courseId: cid } : {}) })
+      .where(eq(studentsTable.id, sid));
 
-    if (courseId) {
-      const sid = parseInt(studentId);
-      const cid = parseInt(courseId);
+    if (cid) {
       const existing = await db.select().from(enrollmentsTable).where(and(eq(enrollmentsTable.studentId, sid), eq(enrollmentsTable.courseId, cid)));
       if (existing.length === 0) {
         await db.insert(enrollmentsTable).values({ studentId: sid, courseId: cid, status: "active" });
       }
     }
 
-    const [student] = await db.select({ name: studentsTable.name, email: studentsTable.email, phone: studentsTable.phone }).from(studentsTable).where(eq(studentsTable.id, parseInt(studentId)));
-
     await db.insert(activityTable).values({
+      tenantId,
       type: "payment",
-      description: `Online payment of $${amount} completed for ${student?.name ?? "student"}`,
-      studentName: student?.name ?? null,
+      description: `Online payment of $${amount} completed for ${student.name}`,
+      studentName: student.name,
       amount: String(amount),
     });
 
-    const [settingsRow] = await db.select().from(settingsTable).limit(1);
+    const [settingsRow] = await db.select().from(settingsTable).where(eq(settingsTable.tenantId, tenantId)).limit(1);
     if (settingsRow) {
       firePurchaseConversions(
         settingsRow,
@@ -230,8 +254,8 @@ router.post("/online", async (req, res) => {
           orderId: String(payment!.id),
           value: Number(amount),
           currency: settingsRow.currency,
-          email: student?.email,
-          phone: student?.phone,
+          email: student.email,
+          phone: student.phone,
           clientIp: req.ip,
           userAgent: req.headers["user-agent"],
         },
@@ -242,7 +266,7 @@ router.post("/online", async (req, res) => {
     res.status(201).json({
       ...payment,
       amount: Number(payment!.amount),
-      studentName: student?.name ?? null,
+      studentName: student.name,
       message: "Payment completed successfully. Course access granted.",
     });
   } catch (err) {
@@ -251,14 +275,12 @@ router.post("/online", async (req, res) => {
   }
 });
 
-// 5. رفع إيصال الدفع اليدوي
-// POST /api/payments/upload-receipt
+// 5. رفع إيصال الدفع
 router.post("/upload-receipt", uploadReceipt.single("receipt"), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No receipt image provided" });
     }
-
     const receiptUrl = `/api/payments/receipts/${req.file.filename}`;
     res.json({ receiptUrl, filename: req.file.filename });
   } catch (err: any) {
@@ -268,16 +290,13 @@ router.post("/upload-receipt", uploadReceipt.single("receipt"), async (req, res)
 });
 
 // 6. عرض إيصال الدفع
-// GET /api/payments/receipts/:filename
 router.get("/receipts/:filename", async (req, res) => {
   try {
     const { filename } = req.params;
     const filePath = path.join(RECEIPTS_DIR, filename!);
-
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "Receipt not found" });
     }
-
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
     fs.createReadStream(filePath).pipe(res);
   } catch (err) {
@@ -289,6 +308,7 @@ router.get("/receipts/:filename", async (req, res) => {
 // 7. تحديث حالة الدفع (من قبل الأدمن)
 router.put("/:id", async (req, res) => {
   try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const id = parseInt(req.params.id!);
     const parsed = CreatePaymentBody.safeParse(req.body);
     if (!parsed.success) {
@@ -297,6 +317,13 @@ router.put("/:id", async (req, res) => {
 
     const { studentId, courseId, amount, status, method, notes, paidAt } = parsed.data;
     const receiptUrl = (req.body as any).receiptUrl ?? null;
+
+    // Verify student belongs to this tenant
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, studentId), eq(studentsTable.tenantId, tenantId)));
+    if (!student) return res.status(404).json({ error: "Student not found" });
 
     const [payment] = await db
       .update(paymentsTable)
@@ -315,21 +342,20 @@ router.put("/:id", async (req, res) => {
 
     if (!payment) return res.status(404).json({ error: "Payment not found" });
 
-    // لو الأدمن وافق على الطلب
     if (status === "completed" || status === "approved") {
       await db.update(studentsTable)
         .set({ paymentStatus: "paid" })
         .where(eq(studentsTable.id, payment.studentId));
 
-      const [student] = await db.select({ name: studentsTable.name, email: studentsTable.email, phone: studentsTable.phone }).from(studentsTable).where(eq(studentsTable.id, payment.studentId));
       await db.insert(activityTable).values({
+        tenantId,
         type: "payment",
-        description: `Admin confirmed payment of $${amount} for ${student?.name}`,
-        studentName: student?.name ?? null,
+        description: `Admin confirmed payment of $${amount} for ${student.name}`,
+        studentName: student.name,
         amount: String(amount),
       });
 
-      const [settingsRow] = await db.select().from(settingsTable).limit(1);
+      const [settingsRow] = await db.select().from(settingsTable).where(eq(settingsTable.tenantId, tenantId)).limit(1);
       if (settingsRow) {
         firePurchaseConversions(
           settingsRow,
@@ -337,8 +363,8 @@ router.put("/:id", async (req, res) => {
             orderId: String(payment.id),
             value: amount,
             currency: settingsRow.currency,
-            email: student?.email,
-            phone: student?.phone,
+            email: student.email,
+            phone: student.phone,
             clientIp: req.ip,
             userAgent: req.headers["user-agent"],
           },
@@ -347,10 +373,7 @@ router.put("/:id", async (req, res) => {
       }
     }
 
-    res.json({
-      ...payment,
-      amount: Number(payment.amount)
-    });
+    res.json({ ...payment, amount: Number(payment.amount) });
   } catch (err) {
     req.log.error({ err }, "Error updating payment");
     res.status(500).json({ error: "Internal server error" });

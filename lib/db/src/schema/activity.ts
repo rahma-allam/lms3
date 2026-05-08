@@ -1,11 +1,13 @@
 import { pgTable, serial, text, integer, timestamp, numeric, pgEnum } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { tenantsTable } from "./tenants";
 
 export const activityTypeEnum = pgEnum("activity_type", ["enrollment", "payment", "course_created", "lesson_completed"]);
 
 export const activityTable = pgTable("activity", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenant_id").references(() => tenantsTable.id, { onDelete: "cascade" }),
   type: activityTypeEnum("type").notNull(),
   description: text("description").notNull(),
   studentName: text("student_name"),

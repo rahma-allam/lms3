@@ -1,9 +1,11 @@
 import { pgTable, serial, text, integer, numeric, timestamp, boolean } from "drizzle-orm/pg-core";
 import { coursesTable } from "./courses";
+import { tenantsTable } from "./tenants";
 
 export const couponsTable = pgTable("coupons", {
   id: serial("id").primaryKey(),
-  code: text("code").notNull().unique(),
+  tenantId: integer("tenant_id").notNull().references(() => tenantsTable.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
   discountType: text("discount_type").notNull(),
   discountValue: numeric("discount_value", { precision: 10, scale: 2 }).notNull(),
   maxUses: integer("max_uses"),
@@ -15,3 +17,4 @@ export const couponsTable = pgTable("coupons", {
 });
 
 export type Coupon = typeof couponsTable.$inferSelect;
+

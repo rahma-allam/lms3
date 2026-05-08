@@ -1,9 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { coursesTable, modulesTable, lessonsTable, studentsTable, activityTable, courseSessionsTable } from "@workspace/db";
-import { eq, sql ,and } from "drizzle-orm";
+import { coursesTable, modulesTable, lessonsTable, studentsTable, activityTable, courseSessionsTable, tenantsTable } from "@workspace/db";
+import { eq, sql, and } from "drizzle-orm";
 import { CreateCourseBody } from "@workspace/api-zod";
-import { tenantsTable } from "@workspace/db";
 
 const router = Router();
 
@@ -18,15 +17,14 @@ async function getDefaultTenantId(): Promise<number> {
 }
 
 router.get("/", async (req, res) => {
-  
   try {
-   const { status } = req.query;
-  const tenantId = req.tenantId ?? (await getDefaultTenantId());
-  const courses = await db
-    .select()
-    .from(coursesTable)
-    .where(eq(coursesTable.tenantId, tenantId))
-    .orderBy(sql`${coursesTable.createdAt} desc`);
+    const { status } = req.query;
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+    const courses = await db
+      .select()
+      .from(coursesTable)
+      .where(eq(coursesTable.tenantId, tenantId))
+      .orderBy(sql`${coursesTable.createdAt} desc`);
     const filtered = status ? courses.filter((c) => c.status === status) : courses;
 
     const enriched = await Promise.all(
@@ -38,7 +36,7 @@ router.get("/", async (req, res) => {
         const [studentCount] = await db
           .select({ count: sql<number>`count(*)::int` })
           .from(studentsTable)
-          .where(eq(studentsTable.courseId, course.id));
+          .where(and(eq(studentsTable.courseId, course.id), eq(studentsTable.tenantId, tenantId)));
         return {
           id: course.id,
           title: course.title,
@@ -75,13 +73,21 @@ router.post("/", async (req, res) => {
     }
 
     const { title, titleAr, description, price, status, courseType, thumbnailUrl } = parsed.data;
+    const { categoryId, level, language, totalHours, isFeatured } = req.body;
     const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
     const [course] = await db.insert(coursesTable).values({
       title, titleAr, description, price: price.toString(),
       status, courseType, thumbnailUrl, tenantId,
+      categoryId: categoryId ? parseInt(categoryId) : null,
+      level: level ?? null,
+      language: language ?? null,
+      totalHours: totalHours ? String(totalHours) : null,
+      isFeatured: isFeatured ?? false,
     }).returning();
 
     await db.insert(activityTable).values({
+      tenantId,
       type: "course_created",
       description: `New course created: ${title}`,
       courseName: title,
@@ -108,6 +114,12 @@ router.post("/", async (req, res) => {
 router.get("/:id/sessions", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    // Verify course belongs to tenant
+    const [course] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)));
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
     const sessions = await db
       .select()
       .from(courseSessionsTable)
@@ -130,6 +142,11 @@ router.get("/:id/sessions", async (req, res) => {
 router.post("/:id/sessions", async (req, res) => {
   try {
     const courseId = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    const [course] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, courseId), eq(coursesTable.tenantId, tenantId)));
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
     const { title, titleAr, scheduledAt, durationMinutes, zoomLink, zoomPassword, order } = req.body;
 
     const [session] = await db
@@ -160,7 +177,9 @@ router.post("/:id/sessions", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
-    const [course] = await db.select().from(coursesTable).where(eq(coursesTable.id, id));
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    const [course] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)));
     if (!course) return res.status(404).json({ error: "Course not found" });
 
     const modules = await db.select().from(modulesTable).where(eq(modulesTable.courseId, id)).orderBy(modulesTable.order);
@@ -188,7 +207,7 @@ router.get("/:id", async (req, res) => {
     const [studentCount] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(studentsTable)
-      .where(eq(studentsTable.courseId, id));
+      .where(and(eq(studentsTable.courseId, id), eq(studentsTable.tenantId, tenantId)));
 
     res.json({
       id: course.id, title: course.title, titleAr: course.titleAr ?? null,
@@ -220,6 +239,12 @@ router.get("/:id", async (req, res) => {
 router.put("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    // Verify ownership
+    const [existing] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)));
+    if (!existing) return res.status(404).json({ error: "Course not found" });
+
     const parsed = CreateCourseBody.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.format() });
@@ -241,7 +266,7 @@ router.put("/:id", async (req, res) => {
         totalHours: totalHours ? String(totalHours) : null,
         isFeatured: isFeatured ?? false,
       })
-      .where(eq(coursesTable.id, id))
+      .where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)))
       .returning();
 
     if (!course) return res.status(404).json({ error: "Course not found" });
@@ -253,7 +278,7 @@ router.put("/:id", async (req, res) => {
     const [studentCount] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(studentsTable)
-      .where(eq(studentsTable.courseId, id));
+      .where(and(eq(studentsTable.courseId, id), eq(studentsTable.tenantId, tenantId)));
 
     res.json({
       id: course.id, title: course.title, titleAr: course.titleAr ?? null,
@@ -277,7 +302,12 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
-    await db.delete(coursesTable).where(eq(coursesTable.id, id));
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    const [existing] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)));
+    if (!existing) return res.status(404).json({ error: "Course not found" });
+
+    await db.delete(coursesTable).where(and(eq(coursesTable.id, id), eq(coursesTable.tenantId, tenantId)));
     res.status(204).send();
   } catch (err) {
     req.log.error({ err }, "Error deleting course");
@@ -288,6 +318,11 @@ router.delete("/:id", async (req, res) => {
 router.get("/:courseId/modules", async (req, res) => {
   try {
     const courseId = parseInt(req.params.courseId!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    const [course] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, courseId), eq(coursesTable.tenantId, tenantId)));
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
     const modules = await db.select().from(modulesTable).where(eq(modulesTable.courseId, courseId)).orderBy(modulesTable.order);
 
     const result = await Promise.all(
@@ -315,6 +350,11 @@ router.get("/:courseId/modules", async (req, res) => {
 router.post("/:courseId/modules", async (req, res) => {
   try {
     const courseId = parseInt(req.params.courseId!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    const [course] = await db.select().from(coursesTable).where(and(eq(coursesTable.id, courseId), eq(coursesTable.tenantId, tenantId)));
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
     const { title, titleAr, order } = req.body;
 
     const [mod] = await db

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { studentsTable, paymentsTable, coursesTable, activityTable, tenantsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and } from "drizzle-orm";
 import { CreateStudentBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -71,6 +71,16 @@ router.post("/", async (req, res) => {
     const { name, email, phone, courseId, status, paymentStatus } = parsed.data;
     const tenantId = req.tenantId ?? (await getDefaultTenantId());
 
+    // Check email uniqueness within tenant
+    const [existing] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.email, email), eq(studentsTable.tenantId, tenantId)))
+      .limit(1);
+    if (existing) {
+      return res.status(409).json({ error: "A student with this email already exists in this academy" });
+    }
+
     const [student] = await db
       .insert(studentsTable)
       .values({ name, email, phone: phone ?? null, courseId: courseId ?? null, status, paymentStatus, tenantId })
@@ -83,6 +93,7 @@ router.post("/", async (req, res) => {
     }
 
     await db.insert(activityTable).values({
+      tenantId,
       type: "enrollment",
       description: `${name} enrolled${courseName ? ` in ${courseName}` : ""}`,
       studentName: name,
@@ -110,12 +121,13 @@ router.post("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
 
     const [result] = await db
       .select({ student: studentsTable, courseName: coursesTable.title })
       .from(studentsTable)
       .leftJoin(coursesTable, eq(studentsTable.courseId, coursesTable.id))
-      .where(eq(studentsTable.id, id));
+      .where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)));
 
     if (!result) return res.status(404).json({ error: "Student not found" });
 
@@ -162,6 +174,8 @@ router.get("/:id", async (req, res) => {
 router.put("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
     const parsed = CreateStudentBody.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.format() });
@@ -169,10 +183,17 @@ router.put("/:id", async (req, res) => {
 
     const { name, email, phone, courseId, status, paymentStatus } = parsed.data;
 
+    // Ensure student belongs to this tenant
+    const [existing] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)));
+    if (!existing) return res.status(404).json({ error: "Student not found" });
+
     const [student] = await db
       .update(studentsTable)
       .set({ name, email, phone: phone ?? null, courseId: courseId ?? null, status, paymentStatus })
-      .where(eq(studentsTable.id, id))
+      .where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)))
       .returning();
 
     if (!student) return res.status(404).json({ error: "Student not found" });
@@ -204,7 +225,16 @@ router.put("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
-    await db.delete(studentsTable).where(eq(studentsTable.id, id));
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+
+    // Ensure student belongs to this tenant
+    const [existing] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)));
+    if (!existing) return res.status(404).json({ error: "Student not found" });
+
+    await db.delete(studentsTable).where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)));
     res.status(204).send();
   } catch (err) {
     req.log.error({ err }, "Error deleting student");
@@ -212,18 +242,18 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// Feature 6: Student Progress Detail
 // GET /api/students/:id/progress-detail
 router.get("/:id/progress-detail", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
     const { modulesTable, lessonsTable, lessonCompletionsTable, quizAttemptsTable, quizzesTable } = await import("@workspace/db");
 
     const [result] = await db
       .select({ student: studentsTable, courseTitle: coursesTable.title })
       .from(studentsTable)
       .leftJoin(coursesTable, eq(studentsTable.courseId, coursesTable.id))
-      .where(eq(studentsTable.id, id));
+      .where(and(eq(studentsTable.id, id), eq(studentsTable.tenantId, tenantId)));
 
     if (!result) return res.status(404).json({ error: "Student not found" });
 
