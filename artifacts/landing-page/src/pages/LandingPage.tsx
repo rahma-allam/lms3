@@ -7,10 +7,17 @@ import Testimonials from "@/components/Testimonials";
 import TrustBadges from "@/components/TrustBadges";
 import Footer from "@/components/Footer";
 import { usePixelTracking } from "@/hooks/use-pixel-tracking";
+import { useQuery } from "@tanstack/react-query";
+import NotFound from "./not-found";
 
 export default function LandingPage() {
   usePixelTracking();
+const { data, isError, error } = useQuery({ queryKey: ['/api/storefront'] });
 
+if (isError) {
+  // لو الـ API رجع 404 → الـ tenant مش موجود
+  return <NotFound />;
+}else{
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans">
       <Navbar />
@@ -25,4 +32,6 @@ export default function LandingPage() {
       <Footer />
     </div>
   );
+  
+} 
 }

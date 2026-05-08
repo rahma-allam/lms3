@@ -17,15 +17,15 @@ export default function Courses() {
 
 const { data: courses, isLoading } = useQuery<any[]>({
   queryKey: ["/api/storefront/courses"],
-  queryFn: () => fetch("/api/storefront/categories").then((r) => r.json()),
+  queryFn: () => fetch("/api/storefront/courses").then((r) => r.json()),
   staleTime: 60_000,
 });
 
-  const { data: categories } = useQuery<any[]>({
-    queryKey: ["/api/categories"],
-    queryFn: () => fetch("/api/categories").then((r) => r.json()),
-    staleTime: 60_000,
-  });
+const { data: categories } = useQuery<any[]>({
+  queryKey: ["/api/storefront/categories"],
+  queryFn: () => fetch("/api/storefront/categories").then((r) => r.json()),
+  staleTime: 60_000,
+});
 
   
 

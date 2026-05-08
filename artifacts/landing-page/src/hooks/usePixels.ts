@@ -1,6 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { useGetSettings } from "@workspace/api-client-react";
+
 
 
 function injectScript(src: string, id: string) {
@@ -54,7 +55,11 @@ function initTikTokPixel(pixelId: string) {
 }
 
 export function usePixels() {
-  const { data: settings } = useGetSettings();
+  const { data: settings } = useQuery({
+  queryKey: ["/api/storefront/settings"],
+  queryFn: () => fetch("/api/storefront/settings").then((r) => r.json()),
+  staleTime: 60_000,
+});
   const [location] = useLocation();
   const initialized = useRef(false);
 
