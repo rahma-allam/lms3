@@ -25,6 +25,20 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const TOKEN_KEY = "auth_token";
 
+function getTenantParam(): string {
+  // جرب من URL الحالي أولاً
+  const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+  if (fromUrl) {
+    localStorage.setItem("tenant_slug", fromUrl); // احفظه
+    return `?tenant=${fromUrl}`;
+  }
+  // لو مش في URL، جيبه من localStorage
+  const fromStorage = localStorage.getItem("tenant_slug") 
+    ?? (window as any).__TENANT_SLUG__ 
+    ?? "";
+  return fromStorage ? `?tenant=${fromStorage}` : "";
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
@@ -32,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchMe = useCallback(async (t: string): Promise<AuthUser | null> => {
     try {
-      const res = await fetch("/api/auth/me", {
+      const res = await fetch(`/api/auth/me${getTenantParam()}`, {
         headers: { Authorization: `Bearer ${t}` },
       });
       if (!res.ok) return null;
@@ -65,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const login = async (email: string, password: string) => {
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(`/api/auth/login${getTenantParam()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
@@ -80,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (body: { name: string; email: string; password: string; phone?: string }) => {
-    const res = await fetch("/api/auth/register", {
+    const res = await fetch(`/api/auth/register${getTenantParam()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

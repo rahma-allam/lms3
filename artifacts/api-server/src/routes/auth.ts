@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { studentsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
@@ -12,20 +12,25 @@ const JWT_SECRET = process.env.SESSION_SECRET || "lms-secret-key";
 const SALT_ROUNDS = 10;
 
 // POST /api/auth/register
-// Register a new student account
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const tenantId = req.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: "Academy not found" });
+    }
 
+    const { name, email, password, phone } = req.body;
     if (!name || !email || !password) {
       return res.status(400).json({ error: "name, email, and password are required" });
     }
 
-    // Check if email already exists
     const [existing] = await db
       .select({ id: studentsTable.id })
       .from(studentsTable)
-      .where(eq(studentsTable.email, email));
+      .where(and(
+        eq(studentsTable.email, email),
+        eq(studentsTable.tenantId, tenantId)
+      ));
 
     if (existing) {
       return res.status(409).json({ error: "Email already registered" });
@@ -42,11 +47,12 @@ router.post("/register", async (req, res) => {
         phone: phone ?? null,
         status: "pending",
         paymentStatus: "pending",
+        tenantId,
       })
       .returning();
 
     const token = jwt.sign(
-      { id: student!.id, email: student!.email, name: student!.name },
+      { id: student!.id, email: student!.email, name: student!.name, tenantId },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -63,17 +69,21 @@ router.post("/register", async (req, res) => {
       },
     });
   } catch (err) {
+    console.error("REGISTER ERROR:", err); // ← أضيفي السطر ده;
     req.log.error({ err }, "Error registering student");
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // POST /api/auth/login
-// Login with email and password, returns JWT token
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const tenantId = req.tenantId;
+    if (!tenantId) {
+      return res.status(400).json({ error: "Academy not found" });
+    }
 
+    const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "email and password are required" });
     }
@@ -81,13 +91,15 @@ router.post("/login", async (req, res) => {
     const [student] = await db
       .select()
       .from(studentsTable)
-      .where(eq(studentsTable.email, email));
+      .where(and(
+        eq(studentsTable.email, email),
+        eq(studentsTable.tenantId, tenantId)
+      ));
 
     if (!student) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
-    // Support students without password (created by admin)
     let passwordValid = false;
     if (student.password) {
       passwordValid = await bcrypt.compare(password, student.password);
@@ -98,7 +110,7 @@ router.post("/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: student.id, email: student.email, name: student.name },
+      { id: student.id, email: student.email, name: student.name, tenantId },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -122,7 +134,6 @@ router.post("/login", async (req, res) => {
 });
 
 // GET /api/auth/me
-// Returns current user info based on JWT token
 router.get("/me", async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -150,7 +161,10 @@ router.get("/me", async (req, res) => {
         progress: studentsTable.progress,
       })
       .from(studentsTable)
-      .where(eq(studentsTable.id, decoded.id));
+      .where(and(
+        eq(studentsTable.id, decoded.id),
+        eq(studentsTable.tenantId, decoded.tenantId)
+      ));
 
     if (!student) {
       return res.status(404).json({ error: "User not found" });
