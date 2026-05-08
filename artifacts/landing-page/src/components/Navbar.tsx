@@ -9,6 +9,7 @@ import { useLocation } from "wouter";
 // import { useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
 
 import { useQuery } from "@tanstack/react-query";
+import { fetchStorefront } from "@/lib/api";
 export default function Navbar() {
   const { lang, setLang, t } = useI18n();
   const { theme, setTheme } = useTheme();
@@ -18,7 +19,7 @@ export default function Navbar() {
 
   const { data: settings } = useQuery<any>({
     queryKey: ["/api/storefront/settings"],
-    queryFn: () => fetch("/api/storefront/settings").then((r) => r.json()),
+    queryFn: () => fetchStorefront("/api/storefront/settings"),
     staleTime: 60_000,
   });
 

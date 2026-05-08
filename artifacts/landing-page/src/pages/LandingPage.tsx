@@ -9,10 +9,16 @@ import Footer from "@/components/Footer";
 import { usePixelTracking } from "@/hooks/use-pixel-tracking";
 import { useQuery } from "@tanstack/react-query";
 import NotFound from "./not-found";
+import { fetchStorefront } from "@/lib/api";
 
 export default function LandingPage() {
   usePixelTracking();
-const { data, isError, error } = useQuery({ queryKey: ['/api/storefront'] });
+const { isError } = useQuery({
+  queryKey: ["/api/storefront/settings"],
+  queryFn: () => fetchStorefront("/api/storefront/settings"),
+  staleTime: 60_000,
+  retry: false,  // ← مهم عشان ميعملش 3 retries قبل ما يظهر الـ NotFound
+});
 
 if (isError) {
   // لو الـ API رجع 404 → الـ tenant مش موجود

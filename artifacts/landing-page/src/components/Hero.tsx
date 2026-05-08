@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { JoinCourseModal } from "./JoinCourseModal";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { fetchStorefront } from "@/lib/api";
 
 export default function Hero() {
   const { t, lang } = useI18n();
@@ -11,7 +12,7 @@ export default function Hero() {
 
  const { data: profile } = useQuery<any>({
   queryKey: ["/api/storefront/settings"],
-  queryFn: () => fetch("/api/storefront/settings").then((r) => r.json()),
+  queryFn: () => fetchStorefront("/api/storefront/settings"),
   staleTime: 60_000,
 });
 

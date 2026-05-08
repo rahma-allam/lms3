@@ -1,14 +1,14 @@
 import { useI18n } from "@/lib/i18n";
 import { Facebook, Twitter, Instagram, Youtube, MessageCircle } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-// import { useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
+import { fetchStorefront } from "@/lib/api";
 
 export default function Footer() {
   const { t, lang } = useI18n();
 
   const { data: settings } = useQuery<any>({
   queryKey: ["/api/storefront/settings"],
-  queryFn: () => fetch("/api/storefront/settings").then((r) => r.json()),
+  queryFn: () => fetchStorefront("/api/storefront/settings"),
   staleTime: 60_000,
 });
 
