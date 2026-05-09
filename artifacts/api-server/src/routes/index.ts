@@ -12,13 +12,13 @@ import adminRouter from "./admin";
 import quizzesRouter from "./quizzes";
 import enrollmentsRouter from "./enrollments";
 import categoriesRouter from "./categories";
-import academyProfileRouter from "./academy-profile";
 import certificatesRouter from "./certificates";
 import couponsRouter from "./coupons";
 import adminAuthRouter from "./admin-auth";
 import instructorAuthRouter from "./instructor-auth";
-import {tenantMiddleware} from "./tenant";
 import { requireAdmin, requireInstructor } from "../middlewares/auth.js";
+import { db, settingsTable, tenantsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -26,20 +26,57 @@ const router: IRouter = Router();
 import storefrontRouter from "./storefront";
 router.use("/storefront", storefrontRouter);
 
-// Public routes (no auth needed)
+// ========== Public Tenant Theme Route ==========
+
+
+router.get("/tenant/theme", async (req, res) => {
+  try {
+    const slug = req.query.slug as string;
+    if (!slug) return res.status(400).json({ error: "slug is required" });
+
+    const [tenant] = await db
+      .select()
+      .from(tenantsTable)
+      .where(eq(tenantsTable.slug, slug))
+      .limit(1);
+
+    if (!tenant) return res.status(404).json({ error: "Academy not found" });
+
+    const [settings] = await db
+      .select()
+      .from(settingsTable)
+      .where(eq(settingsTable.tenantId, tenant.id))
+      .limit(1);
+
+    res.json({
+      tenantId: tenant.id,
+      theme: {
+        academyName: settings?.academyName ?? tenant.name,
+        academyNameAr: settings?.academyNameAr ?? null,
+        logoUrl: settings?.logoUrl ?? null,
+        defaultLanguage: settings?.defaultLanguage ?? "ar",
+        currency: settings?.currency ?? "USD",
+        metaPixelId: settings?.metaPixelId ?? null,
+        googleTagId: settings?.googleTagId ?? null,
+        tiktokPixelId: settings?.tiktokPixelId ?? null,
+        manualPaymentInstructions: settings?.manualPaymentInstructions ?? null,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ========== Public Routes (no auth) ==========
 router.use(healthRouter);
 router.use("/instructor-auth", instructorAuthRouter);
 router.use("/auth", authRouter);
 router.use("/admin-auth", adminAuthRouter);
 
-// Public tenant theme endpoint (called by React frontend on load)
-router.use("/tenant", tenantMiddleware);
-
-
-// Instructor routes
+// ========== Instructor Routes ==========
 router.use("/instructors", requireInstructor, instructorsRouter);
 
-// Admin-protected routes
+// ========== Admin-Protected Routes ==========
 router.use("/admin", requireAdmin, adminRouter);
 router.use("/dashboard", requireAdmin, dashboardRouter);
 router.use("/courses", requireAdmin, coursesRouter);
@@ -51,8 +88,7 @@ router.use("/settings", requireAdmin, settingsRouter);
 router.use("/quizzes", requireAdmin, quizzesRouter);
 router.use("/enrollments", requireAdmin, enrollmentsRouter);
 router.use("/categories", requireAdmin, categoriesRouter);
-
 router.use("/certificates", requireAdmin, certificatesRouter);
-router.use("/coupons", requireAdmin, couponsRouter);
+router.use("/coupons", requireAdmin, couponsRouter)
 
 export default router;

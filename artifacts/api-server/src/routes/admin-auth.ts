@@ -35,10 +35,15 @@ router.post("/setup", async (req, res) => {
 
 router.post("/login", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: "email and password required" });
 
-    const [admin] = await db.select().from(adminUsersTable).where(eq(adminUsersTable.email, email));
+     const [admin] = await db
+    .select()
+    .from(adminUsersTable)
+    .where(and(eq(adminUsersTable.email, email),eq(adminUsersTable.tenantId, tenantId)));
     if (!admin) return res.status(401).json({ error: "Invalid credentials" });
 
     const valid = await bcrypt.compare(password, admin.password);
@@ -51,6 +56,9 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+
+
 
 router.get("/me", async (req, res) => {
   try {

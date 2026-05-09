@@ -10,7 +10,9 @@ import RegisterPage from "./pages/RegisterPage";
 import LoginPage from "./pages/LoginPage";
 import StudentPortal from "./pages/StudentPortal";
 import CertificatePage from "./pages/CertificatePage";
+import NotFound from "./pages/not-found";
 import { usePixels } from "./hooks/usePixels";
+import { useEffect, useState } from "react";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,6 +24,42 @@ const queryClient = new QueryClient({
   },
 });
 
+// ── Tenant Guard ──────────────────────────────────────────
+function TenantGuard({ children }: { children: React.ReactNode }) {
+  const [status, setStatus] = useState<"loading" | "ok" | "notFound">("loading");
+
+  useEffect(() => {
+    // احفظ الـ slug من URL في localStorage فوراً
+    const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+    if (fromUrl) localStorage.setItem("tenant_slug", fromUrl);
+
+    const slug = fromUrl ?? localStorage.getItem("tenant_slug");
+
+    if (!slug) {
+      setStatus("notFound");
+      return;
+    }
+
+    fetch(`/api/storefront/settings?tenant=${slug}`)
+      .then((res) => {
+        if (res.ok) setStatus("ok");
+        else setStatus("notFound");
+      })
+      .catch(() => setStatus("notFound"));
+  }, []);
+
+  if (status === "loading") return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+    </div>
+  );
+
+  if (status === "notFound") return <NotFound />;
+
+  return <>{children}</>;
+}
+
+// ── Routes ────────────────────────────────────────────────
 function Routes() {
   usePixels();
   return (
@@ -38,15 +76,18 @@ function Routes() {
   );
 }
 
+// ── App ───────────────────────────────────────────────────
 function App() {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
           <AuthProvider>
-            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-              <Routes />
-            </WouterRouter>
+            <TenantGuard>
+              <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
+                <Routes />
+              </WouterRouter>
+            </TenantGuard>
           </AuthProvider>
         </I18nProvider>
       </QueryClientProvider>
