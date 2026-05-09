@@ -47,9 +47,13 @@ function isUrl(input: RequestInfo | URL): input is URL {
 function getTenantSlug(): string | null {
   if (typeof window === "undefined") return null;
   const fromQuery = new URLSearchParams(window.location.search).get("tenant");
-  if (fromQuery) return fromQuery;
-  // In production, read from a global set by TenantProvider
-  return (window as any).__TENANT_SLUG__ ?? null;
+  if (fromQuery) {
+    localStorage.setItem("tenant_slug", fromQuery); // ← احفظه
+    return fromQuery;
+  }
+  return (window as any).__TENANT_SLUG__ 
+    ?? localStorage.getItem("tenant_slug") // ← اقرأ من localStorage
+    ?? null;
 }
 
 function applyBaseUrl(input: RequestInfo | URL): RequestInfo | URL {

@@ -21,7 +21,8 @@ export default function AdminLogin() {
     setLoading(false);
     if (!ok) {setError("Invalid email or password");}
     else{
-      navigate("/"); 
+      const tenant = localStorage.getItem("tenant_slug");
+      navigate(tenant ? `/?tenant=${tenant}` : "/");
     }
   };
 

@@ -46,7 +46,10 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   const [, navigate] = useLocation();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) navigate("/login");
+   if (!isLoading && !isAuthenticated) {
+  const tenant = localStorage.getItem("tenant_slug");
+  navigate(tenant ? `/login?tenant=${tenant}` : "/login");
+}
   }, [isLoading, isAuthenticated, navigate]);
 
   if (isLoading) return (
@@ -63,7 +66,10 @@ function InstructorAuthGuard({ children }: { children: React.ReactNode }) {
   const [, navigate] = useLocation();
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) navigate("/instructor/login");
+    if (!isLoading && !isAuthenticated) {
+  const tenant = localStorage.getItem("tenant_slug");
+  navigate(tenant ? `/instructor/login?tenant=${tenant}` : "/instructor/login");
+}
   }, [isLoading, isAuthenticated, navigate]);
 
   if (isLoading) return (

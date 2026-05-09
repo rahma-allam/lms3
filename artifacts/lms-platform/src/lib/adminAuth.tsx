@@ -17,8 +17,17 @@ interface AdminAuthContext {
 }
 
 const Ctx = createContext<AdminAuthContext | undefined>(undefined);
-
 const TOKEN_KEY = "lms_admin_token";
+
+function getTenantParam(): string {
+  const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+  if (fromUrl) {
+    localStorage.setItem("tenant_slug", fromUrl);
+    return `?tenant=${fromUrl}`;
+  }
+  const fromStorage = localStorage.getItem("tenant_slug") ?? "";
+  return fromStorage ? `?tenant=${fromStorage}` : "";
+}
 
 export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const [admin, setAdmin] = useState<AdminUser | null>(null);
@@ -28,7 +37,9 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY);
     if (!stored) { setIsLoading(false); return; }
-    fetch("/api/admin-auth/me", { headers: { Authorization: `Bearer ${stored}` } })
+    fetch(`/api/admin-auth/me${getTenantParam()}`, {
+      headers: { Authorization: `Bearer ${stored}` },
+    })
       .then((r) => r.ok ? r.json() : Promise.reject())
       .then((data) => { setAdmin(data); setToken(stored); })
       .catch(() => { localStorage.removeItem(TOKEN_KEY); setToken(null); })
@@ -37,7 +48,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      const res = await fetch("/api/admin-auth/login", {
+      const res = await fetch(`/api/admin-auth/login${getTenantParam()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),

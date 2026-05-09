@@ -65,9 +65,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
         "demo";
 
       // Store slug globally so customFetch can pick it up
-      if (isLocalDev && devSlug) {
-        (window as any).__TENANT_SLUG__ = devSlug;
-      } else if (BASE_DOMAIN && hostname.endsWith(`.${BASE_DOMAIN}`)) {
+     if (isLocalDev && devSlug) {
+  (window as any).__TENANT_SLUG__ = devSlug;
+  localStorage.setItem("tenant_slug", devSlug); // ← أضيفي السطر ده
+} else if (BASE_DOMAIN && hostname.endsWith(`.${BASE_DOMAIN}`)) {
         const slug = hostname.replace(`.${BASE_DOMAIN}`, "");
         (window as any).__TENANT_SLUG__ = slug;
       }
