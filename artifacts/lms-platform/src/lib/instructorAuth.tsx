@@ -20,6 +20,13 @@ interface InstructorAuthContext {
 const Ctx = createContext<InstructorAuthContext | undefined>(undefined);
 const TOKEN_KEY = "lms_instructor_token";
 
+function getTenantParam(): string {
+  const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+  if (fromUrl) { localStorage.setItem("tenant_slug", fromUrl); return `?tenant=${fromUrl}`; }
+  const s = localStorage.getItem("tenant_slug") ?? "";
+  return s ? `?tenant=${s}` : "";
+}
+
 export function InstructorAuthProvider({ children }: { children: ReactNode }) {
   const [instructor, setInstructor] = useState<InstructorUser | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
@@ -28,7 +35,9 @@ export function InstructorAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY);
     if (!stored) { setIsLoading(false); return; }
-    fetch("/api/instructor-auth/me", { headers: { Authorization: `Bearer ${stored}` } })
+    fetch(`/api/instructor-auth/me${getTenantParam()}`, {
+      headers: { Authorization: `Bearer ${stored}` },
+    })
       .then((r) => r.ok ? r.json() : Promise.reject())
       .then((data) => { setInstructor(data); setToken(stored); })
       .catch(() => { localStorage.removeItem(TOKEN_KEY); setToken(null); })
@@ -37,7 +46,7 @@ export function InstructorAuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      const res = await fetch("/api/instructor-auth/login", {
+      const res = await fetch(`/api/instructor-auth/login${getTenantParam()}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),

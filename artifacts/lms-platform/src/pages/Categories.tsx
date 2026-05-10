@@ -9,8 +9,23 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 
 type Category = { id: number; name: string; nameAr: string | null; slug: string; color: string; order: number };
+const fetchWithAuth = (url: string, options?: RequestInit) => {
+  const token = localStorage.getItem("lms_admin_token");
+  const tenant = localStorage.getItem("tenant_slug");
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(`${url}${tenant ? `${sep}tenant=${tenant}` : ""}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  });
+};
 
-const fetchCategories = (): Promise<Category[]> => fetch("/api/categories").then((r) => r.json());
+
+const fetchCategories = (): Promise<Category[]> => 
+  fetchWithAuth("/api/categories").then((r) => r.json());
 
 export default function Categories() {
   const { t } = useI18n();
@@ -23,20 +38,26 @@ export default function Categories() {
   const form = useForm<{ name: string; nameAr: string; slug: string; color: string; order: number }>();
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => fetch("/api/categories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then((r) => r.json()),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); setAddDialog(false); form.reset(); toast.success("Category created"); },
-    onError: () => toast.error("Failed to create category"),
-  });
+  mutationFn: (data: any) => fetchWithAuth("/api/categories", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }).then((r) => r.json()),
+  onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); setAddDialog(false); form.reset(); toast.success("Category created"); },
+  onError: () => toast.error("Failed to create category"),
+});
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, ...data }: any) => fetch(`/api/categories/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then((r) => r.json()),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); setEditCat(null); toast.success("Category updated"); },
-  });
+const updateMutation = useMutation({
+  mutationFn: ({ id, ...data }: any) => fetchWithAuth(`/api/categories/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }).then((r) => r.json()),
+  onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); setEditCat(null); toast.success("Category updated"); },
+});
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => fetch(`/api/categories/${id}`, { method: "DELETE" }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); toast.success("Category deleted"); },
-  });
+const deleteMutation = useMutation({
+  mutationFn: (id: number) => fetchWithAuth(`/api/categories/${id}`, { method: "DELETE" }),
+  onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/categories"] }); toast.success("Category deleted"); },
+});
 
   const onSubmit = (data: any) => {
     if (!data.slug) data.slug = data.name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");

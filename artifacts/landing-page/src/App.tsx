@@ -1,7 +1,7 @@
 import { I18nProvider } from "./lib/i18n";
 import { AuthProvider } from "./lib/auth";
 import { ThemeProvider } from "next-themes";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Switch, Route, Router as WouterRouter } from "wouter";
 import LandingPage from "./pages/LandingPage";
 import CheckoutPage from "./pages/CheckoutPage";
@@ -25,40 +25,39 @@ const queryClient = new QueryClient({
 });
 
 // ── Tenant Guard ──────────────────────────────────────────
+// في App.tsx عدّلي TenantGuard كامل
 function TenantGuard({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<"loading" | "ok" | "notFound">("loading");
-
-  useEffect(() => {
-    // احفظ الـ slug من URL في localStorage فوراً
+  const [slug] = useState(() => {
     const fromUrl = new URLSearchParams(window.location.search).get("tenant");
     if (fromUrl) localStorage.setItem("tenant_slug", fromUrl);
+    return fromUrl ?? localStorage.getItem("tenant_slug");
+  });
 
-    const slug = fromUrl ?? localStorage.getItem("tenant_slug");
+  const { isLoading, isError } = useQuery({
+    queryKey: ["/api/storefront/settings"],
+    queryFn: async () => {
+      if (!slug) throw new Error("No tenant");
+      const res = await fetch(`/api/storefront/settings?tenant=${slug}`);
+      if (!res.ok) throw new Error("Not found");
+      return res.json();
+    },
+    enabled: !!slug,
+    retry: false,
+    staleTime: 60_000,
+  });
 
-    if (!slug) {
-      setStatus("notFound");
-      return;
-    }
+  if (!slug) return <NotFound />;
 
-    fetch(`/api/storefront/settings?tenant=${slug}`)
-      .then((res) => {
-        if (res.ok) setStatus("ok");
-        else setStatus("notFound");
-      })
-      .catch(() => setStatus("notFound"));
-  }, []);
-
-  if (status === "loading") return (
+  if (isLoading) return (
     <div className="min-h-screen flex items-center justify-center">
       <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
     </div>
   );
 
-  if (status === "notFound") return <NotFound />;
+  if (isError) return <NotFound />;
 
   return <>{children}</>;
 }
-
 // ── Routes ────────────────────────────────────────────────
 function Routes() {
   usePixels();

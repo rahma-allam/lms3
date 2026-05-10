@@ -1,12 +1,10 @@
 import { useParams, useLocation } from "wouter";
 import { useI18n } from "@/lib/i18n";
-import { useQuery } from "@tanstack/react-query";
-import {
-  useGetStudent,
-  getGetStudentQueryKey,
-} from "@workspace/api-client-react";
-import { ChevronLeft, Mail, Phone, BookOpen, CreditCard, CheckCircle2, Circle, BarChart3, Trophy, XCircle } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useGetStudent, getGetStudentQueryKey } from "@workspace/api-client-react";
+import { ChevronLeft, Mail, Phone, BookOpen, CreditCard, CheckCircle2, Circle, BarChart3, Trophy, XCircle, UserCheck, UserX } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 const paymentBadge: Record<string, string> = {
   completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
@@ -15,26 +13,76 @@ const paymentBadge: Record<string, string> = {
   refunded: "bg-muted text-muted-foreground",
 };
 
+function fetchWithAuth(url: string, options?: RequestInit) {
+  const token = localStorage.getItem("lms_admin_token");
+  const tenant = localStorage.getItem("tenant_slug");
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(`${url}${tenant ? `${sep}tenant=${tenant}` : ""}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options?.headers ?? {}),
+    },
+  });
+}
+
 export default function StudentDetail() {
   const { id } = useParams<{ id: string }>();
   const { t } = useI18n();
   const [, navigate] = useLocation();
+  const qc = useQueryClient();
   const studentId = parseInt(id!);
 
   const { data: student, isLoading } = useGetStudent(studentId, {
     query: { queryKey: getGetStudentQueryKey(studentId) },
   });
 
-  // Feature 6: Fetch detailed per-lesson progress
   const { data: progressDetail, isLoading: progressLoading } = useQuery<any>({
     queryKey: ["student-progress-detail", studentId],
     queryFn: async () => {
-      const res = await fetch(`/api/students/${studentId}/progress-detail`);
+      const res = await fetchWithAuth(`/api/students/${studentId}/progress-detail`);
       if (!res.ok) throw new Error("Failed to fetch progress detail");
       return res.json();
     },
     enabled: !!studentId,
   });
+
+  // ✅ mutation لتغيير الحالة
+  const statusMutation = useMutation({
+  mutationFn: async (newStatus: string) => {
+    const token = localStorage.getItem("lms_admin_token");
+    const tenant = localStorage.getItem("tenant_slug");
+    const res = await fetch(`/api/students/${studentId}${tenant ? `?tenant=${tenant}` : ""}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        name: student!.name,
+        email: student!.email,
+        phone: student!.phone ?? undefined,
+        courseId: (student as any).courseId ?? undefined,
+        status: newStatus,
+        paymentStatus: student!.paymentStatus,
+      }),
+    });
+    if (!res.ok) throw new Error("Failed to update status");
+    return res.json();
+  },
+  onSuccess: () => {
+    qc.invalidateQueries({ queryKey: getGetStudentQueryKey(studentId) });
+    qc.invalidateQueries({ queryKey: ["/api/students"] });
+    toast.success("تم تغيير حالة الطالب");
+  },
+  onError: () => toast.error("فشل تغيير الحالة"),
+});
+
+  const handleNavigateBack = () => {
+    const tenant = localStorage.getItem("tenant_slug");
+    navigate(tenant ? `/students?tenant=${tenant}` : "/students");
+  };
 
   if (isLoading) {
     return (
@@ -47,10 +95,12 @@ export default function StudentDetail() {
 
   if (!student) return <div className="text-center py-16 text-muted-foreground">Student not found</div>;
 
+  const isActive = student.status === "active";
+
   return (
     <div className="max-w-3xl mx-auto space-y-5">
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate("/students")} className="text-muted-foreground hover:text-foreground">
+        <button onClick={handleNavigateBack} className="text-muted-foreground hover:text-foreground">
           <ChevronLeft className="w-5 h-5" />
         </button>
         <h1 className="text-xl font-bold">{student.name}</h1>
@@ -66,7 +116,7 @@ export default function StudentDetail() {
             <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
               <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{student.email}</span>
               {student.phone && <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{student.phone}</span>}
-              {student.courseName && <span className="flex items-center gap-1"><BookOpen className="w-3.5 h-3.5" />{student.courseName}</span>}
+              {(student as any).courseName && <span className="flex items-center gap-1"><BookOpen className="w-3.5 h-3.5" />{(student as any).courseName}</span>}
             </div>
             <div className="flex items-center gap-2 pt-1">
               <div className="w-32 bg-muted rounded-full h-2">
@@ -75,6 +125,8 @@ export default function StudentDetail() {
               <span className="text-xs text-muted-foreground">{student.progress}% complete</span>
             </div>
           </div>
+
+          {/* ✅ زرار تغيير الحالة */}
           <div className="flex flex-col items-end gap-2">
             <span className={cn("text-xs font-semibold px-2.5 py-1 rounded-full",
               student.paymentStatus === "paid" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
@@ -83,14 +135,27 @@ export default function StudentDetail() {
             )}>
               {t(student.paymentStatus)}
             </span>
-            <span className="text-xs text-muted-foreground">
-              Enrolled {new Date(student.enrolledAt).toLocaleDateString()}
-            </span>
+            <button
+              onClick={() => statusMutation.mutate(isActive ? "inactive" : "active")}
+              disabled={statusMutation.isPending}
+              className={cn(
+                "flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition-colors",
+                isActive
+                  ? "bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400"
+                  : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400"
+              )}
+            >
+              {isActive ? <UserX className="w-3.5 h-3.5" /> : <UserCheck className="w-3.5 h-3.5" />}
+              {isActive ? "Suspend" : "Activate"}
+            </button>
+            {/* <span className="text-xs text-muted-foreground">
+              Enrolled {new Date((student as any).enrolledAt ?? student.createdAt).toLocaleDateString()}
+            </span> */}
           </div>
         </div>
       </div>
 
-      {/* Feature 6: Per-lesson Progress Detail */}
+      {/* Lesson Progress */}
       <div className="bg-card border border-card-border rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-border flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-primary" />
@@ -101,19 +166,14 @@ export default function StudentDetail() {
             </span>
           )}
         </div>
-
         {progressLoading && (
           <div className="space-y-2 p-4">
             {[1, 2, 3].map((i) => <div key={i} className="h-8 bg-muted animate-pulse rounded" />)}
           </div>
         )}
-
         {!progressLoading && (!progressDetail || !progressDetail.enrolled) && (
-          <div className="text-center py-10 text-muted-foreground text-sm">
-            Not enrolled in any course
-          </div>
+          <div className="text-center py-10 text-muted-foreground text-sm">Not enrolled in any course</div>
         )}
-
         {!progressLoading && progressDetail?.enrolled && (
           <div className="divide-y divide-border">
             {(progressDetail.modules ?? []).map((mod: any) => (
@@ -127,9 +187,7 @@ export default function StudentDetail() {
                       {lesson.completed
                         ? <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
                         : <Circle className="w-4 h-4 text-muted-foreground/40 shrink-0" />}
-                      <span className="text-sm flex-1 truncate">
-                        {lesson.titleAr || lesson.title}
-                      </span>
+                      <span className="text-sm flex-1 truncate">{lesson.titleAr || lesson.title}</span>
                       {lesson.quizAttempt && (
                         <div className={cn(
                           "flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0",
@@ -137,9 +195,7 @@ export default function StudentDetail() {
                             ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
                             : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
                         )}>
-                          {lesson.quizAttempt.passed
-                            ? <Trophy className="w-3 h-3" />
-                            : <XCircle className="w-3 h-3" />}
+                          {lesson.quizAttempt.passed ? <Trophy className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
                           Quiz: {lesson.quizAttempt.score}%
                         </div>
                       )}
@@ -152,6 +208,7 @@ export default function StudentDetail() {
         )}
       </div>
 
+      {/* Payment History */}
       <div className="bg-card border border-card-border rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-border flex items-center gap-2">
           <CreditCard className="w-4 h-4 text-primary" />

@@ -9,6 +9,14 @@ import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
+
+function getTenantParam(): string {
+  const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+  if (fromUrl) { localStorage.setItem("tenant_slug", fromUrl); return `?tenant=${fromUrl}`; }
+  const s = localStorage.getItem("tenant_slug") ?? "";
+  return s ? `?tenant=${s}` : "";
+}
+
 export default function Courses() {
   const { t, lang } = useI18n();
   const { trackViewContent } = usePixelTracking();
@@ -17,27 +25,27 @@ export default function Courses() {
 
 const { data: courses, isLoading } = useQuery<any[]>({
   queryKey: ["/api/storefront/courses"],
-  queryFn: () => fetch("/api/storefront/courses").then((r) => r.json()),
+  queryFn: () => fetch(`/api/storefront/courses${getTenantParam()}`).then((r) => r.json()),
   staleTime: 60_000,
 });
 
 const { data: categories } = useQuery<any[]>({
   queryKey: ["/api/storefront/categories"],
-  queryFn: () => fetch("/api/storefront/categories").then((r) => r.json()),
+  queryFn: () => fetch(`/api/storefront/categories${getTenantParam()}`).then((r) => r.json()),
   staleTime: 60_000,
 });
-
   
 
-  const handleBuyNow = (courseId: number, price: number, title: string) => {
-    trackViewContent({ contentId: String(courseId), contentName: title, value: price });
-    navigate(`/checkout?courseId=${courseId}`);
-  };
+ const handleBuyNow = (courseId: number, price: number, title: string) => {
+  trackViewContent({ contentId: String(courseId), contentName: title, value: price });
+  const tenant = localStorage.getItem("tenant_slug");
+  navigate(`/checkout?courseId=${courseId}${tenant ? `&tenant=${tenant}` : ""}`);
+};
 
-  const handleViewCourse = (courseId: number) => {
-    navigate(`/course/${courseId}`);
-  };
-
+const handleViewCourse = (courseId: number) => {
+  const tenant = localStorage.getItem("tenant_slug");
+  navigate(`/course/${courseId}${tenant ? `?tenant=${tenant}` : ""}`);
+};
   const safeCourses = Array.isArray(courses) ? courses : [];
   const filtered = activeCat ? safeCourses.filter((c: any) => c.categoryId === activeCat) : safeCourses;
 

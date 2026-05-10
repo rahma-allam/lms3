@@ -19,8 +19,12 @@ export default function InstructorLogin() {
     setLoading(true);
     const ok = await login(email, password);
     setLoading(false);
+   // ✅ بعد الـ login الناجح
     if (!ok) setError("الإيميل أو كلمة السر غلط");
-    else navigate("/instructor");
+    else {
+      const tenant = localStorage.getItem("tenant_slug");
+      navigate(tenant ? `/instructor?tenant=${tenant}` : "/instructor");
+    }
   };
 
   return (

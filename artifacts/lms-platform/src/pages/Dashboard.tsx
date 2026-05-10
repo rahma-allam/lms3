@@ -6,10 +6,9 @@ import {
   getGetDashboardSummaryQueryKey,
   getGetRecentActivityQueryKey,
 } from "@workspace/api-client-react";
-import { Users, BookOpen, TrendingUp, Clock, Activity, CheckCircle, Award } from "lucide-react";
+import { Users, BookOpen, TrendingUp, Clock, Activity, Award } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
-// Feature 2: Fallback hardcoded data used while loading real data
 const fallbackMonthlyData = [
   { month: "Oct", revenue: 820 },
   { month: "Nov", revenue: 1100 },
@@ -20,18 +19,22 @@ const fallbackMonthlyData = [
   { month: "Apr", revenue: 1345 },
 ];
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  color,
-  sub,
-}: {
-  label: string;
-  value: string | number;
+function fetchWithAuth(url: string) {
+  const token = localStorage.getItem("lms_admin_token");
+  const tenant = localStorage.getItem("tenant_slug");
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(`${url}${tenant ? `${sep}tenant=${tenant}` : ""}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+}
+
+function StatCard({ label, value, icon: Icon, color, sub }: {
+  label: string; value: string | number;
   icon: React.ComponentType<{ className?: string }>;
-  color: string;
-  sub?: string;
+  color: string; sub?: string;
 }) {
   return (
     <div className="bg-card border border-card-border rounded-xl p-5 flex items-start gap-4">
@@ -69,31 +72,32 @@ function timeAgo(iso: string) {
 
 export default function Dashboard() {
   const { t } = useI18n();
+
   const { data: summary, isLoading: loadingSummary } = useGetDashboardSummary({
     query: { queryKey: getGetDashboardSummaryQueryKey() },
   });
+
   const { data: activity, isLoading: loadingActivity } = useGetRecentActivity({
     query: { queryKey: getGetRecentActivityQueryKey() },
   });
 
-  // Feature 2: Fetch real monthly revenue data
-  const { data: monthlyRevenueData, isLoading: loadingRevenue } = useQuery<{ month: string; revenue: number }[]>({
+  // ✅ fetchWithAuth بدل fetch العادي
+  const { data: monthlyRevenueData } = useQuery<{ month: string; revenue: number }[]>({
     queryKey: ["dashboard", "monthly-revenue"],
     queryFn: async () => {
-      const res = await fetch("/api/dashboard/monthly-revenue");
+      const res = await fetchWithAuth("/api/dashboard/monthly-revenue");
       if (!res.ok) throw new Error("Failed to fetch monthly revenue");
       return res.json();
     },
   });
+
   const monthlyData = monthlyRevenueData ?? fallbackMonthlyData;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div>
         <h1 className="text-xl font-bold text-foreground">{t("dashboard")}</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Welcome back. Here's what's happening today.
-        </p>
+        <p className="text-sm text-muted-foreground mt-1">Welcome back. Here's what's happening today.</p>
       </div>
 
       {loadingSummary ? (
@@ -104,32 +108,10 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            label={t("totalStudents")}
-            value={summary?.totalStudents ?? 0}
-            icon={Users}
-            color="bg-primary"
-            sub={`${summary?.activeStudents ?? 0} active`}
-          />
-          <StatCard
-            label={t("totalCourses")}
-            value={summary?.totalCourses ?? 0}
-            icon={BookOpen}
-            color="bg-violet-500"
-          />
-          <StatCard
-            label={t("revenue")}
-            value={`$${(summary?.totalRevenue ?? 0).toLocaleString()}`}
-            icon={TrendingUp}
-            color="bg-emerald-500"
-            sub={`$${(summary?.thisMonthRevenue ?? 0).toLocaleString()} this month`}
-          />
-          <StatCard
-            label={t("pendingRevenue")}
-            value={`$${(summary?.pendingRevenue ?? 0).toLocaleString()}`}
-            icon={Clock}
-            color="bg-amber-500"
-          />
+          <StatCard label={t("totalStudents")} value={summary?.totalStudents ?? 0} icon={Users} color="bg-primary" sub={`${summary?.activeStudents ?? 0} active`} />
+          <StatCard label={t("totalCourses")} value={summary?.totalCourses ?? 0} icon={BookOpen} color="bg-violet-500" />
+          <StatCard label={t("revenue")} value={`$${(summary?.totalRevenue ?? 0).toLocaleString()}`} icon={TrendingUp} color="bg-emerald-500" sub={`$${(summary?.thisMonthRevenue ?? 0).toLocaleString()} this month`} />
+          <StatCard label={t("pendingRevenue")} value={`$${(summary?.pendingRevenue ?? 0).toLocaleString()}`} icon={Clock} color="bg-amber-500" />
         </div>
       )}
 
@@ -148,21 +130,10 @@ export default function Dashboard() {
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
               <Tooltip
-                contentStyle={{
-                  background: "hsl(var(--card))",
-                  border: "1px solid hsl(var(--border))",
-                  borderRadius: "8px",
-                  fontSize: 12,
-                }}
+                contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px", fontSize: 12 }}
                 formatter={(value) => [`$${value}`, "Revenue"]}
               />
-              <Area
-                type="monotone"
-                dataKey="revenue"
-                stroke="hsl(243 75% 59%)"
-                strokeWidth={2}
-                fill="url(#revenueGradient)"
-              />
+              <Area type="monotone" dataKey="revenue" stroke="hsl(243 75% 59%)" strokeWidth={2} fill="url(#revenueGradient)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -171,14 +142,12 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold text-foreground mb-4">{t("recentActivity")}</h2>
           {loadingActivity ? (
             <div className="space-y-3">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="h-12 bg-muted animate-pulse rounded-lg" />
-              ))}
+              {[...Array(5)].map((_, i) => <div key={i} className="h-12 bg-muted animate-pulse rounded-lg" />)}
             </div>
           ) : (
             <div className="space-y-3 overflow-y-auto max-h-[280px]">
-            {(Array.isArray(activity) ? activity : []).slice(0, 5).map((item) => (
-                 <div key={item.id} className="flex gap-3 items-start">
+              {(Array.isArray(activity) ? activity : []).slice(0, 5).map((item) => (
+                <div key={item.id} className="flex gap-3 items-start">
                   <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${activityBadge(item.type)}`}>
                     {item.type === "enrollment" ? "Enrolled" : item.type === "payment" ? "Paid" : item.type === "course_created" ? "Course" : "Lesson"}
                   </span>
@@ -187,7 +156,7 @@ export default function Dashboard() {
                     <p className="text-[10px] text-muted-foreground mt-0.5">{timeAgo(item.createdAt)}</p>
                   </div>
                 </div>
-))}
+              ))}
             </div>
           )}
         </div>
@@ -201,10 +170,7 @@ export default function Dashboard() {
           </div>
           <p className="text-2xl font-bold">{summary?.completionRate?.toFixed(1) ?? 0}%</p>
           <div className="mt-3 w-full bg-muted rounded-full h-2">
-            <div
-              className="bg-primary h-2 rounded-full transition-all"
-              style={{ width: `${summary?.completionRate ?? 0}%` }}
-            />
+            <div className="bg-primary h-2 rounded-full transition-all" style={{ width: `${summary?.completionRate ?? 0}%` }} />
           </div>
         </div>
         <div className="bg-card border border-card-border rounded-xl p-5">

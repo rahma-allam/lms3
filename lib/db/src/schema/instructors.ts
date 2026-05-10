@@ -3,12 +3,16 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { coursesTable } from "./courses";
 import { studentsTable } from "./students";
+import { tenantsTable } from "./tenants";
 
 export const instructorsTable = pgTable("instructors", {
   id: serial("id").primaryKey(),
+  tenantId: integer("tenant_id")
+    .notNull()
+    .references(() => tenantsTable.id, { onDelete: "cascade" }), // ← أضيفي ده
   name: text("name").notNull(),
   nameAr: text("name_ar"),
-  email: text("email").notNull().unique(),
+  email: text("email").notNull(), // ← شيلي .unique() لأن نفس الإيميل ممكن في أكاديميتين
   password: text("password").notNull().default(""),
   phone: text("phone"),
   bio: text("bio"),

@@ -7,7 +7,9 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
     const auth = req.headers["authorization"];
     if (!auth?.startsWith("Bearer "))
       return res.status(401).json({ error: "Unauthorized" });
-    verifyAdminToken(auth.slice(7));
+    const payload = verifyAdminToken(auth.slice(7));
+    // ✅ حط الـ tenantId من الـ token على الـ req
+    if (!req.tenantId) req.tenantId = payload.tenantId;
     next();
   } catch {
     res.status(401).json({ error: "Invalid or expired token" });

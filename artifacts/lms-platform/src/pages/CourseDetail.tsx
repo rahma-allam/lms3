@@ -1,306 +1,3 @@
-// import { useState } from "react";
-// import { useParams, useLocation } from "wouter";
-// import { useI18n } from "@/lib/i18n";
-// import {
-//   useGetCourse,
-//   useCreateModule,
-//   useCreateLesson,
-//   useDeleteLesson,
-//   getGetCourseQueryKey,
-// } from "@workspace/api-client-react";
-// import { useQueryClient } from "@tanstack/react-query";
-// import { ChevronLeft, ChevronDown, ChevronRight, Plus, Trash2, Video, FileText, Type } from "lucide-react";
-// import { Button } from "@/components/ui/button";
-// import { Input } from "@/components/ui/input";
-// import {
-//   Dialog,
-//   DialogContent,
-//   DialogHeader,
-//   DialogTitle,
-//   DialogFooter,
-// } from "@/components/ui/dialog";
-// import { useForm } from "react-hook-form";
-// import { toast } from "sonner";
-// import { cn } from "@/lib/utils";
-
-// const lessonIcons: Record<string, React.ReactNode> = {
-//   video: <Video className="w-3.5 h-3.5 text-blue-500" />,
-//   pdf: <FileText className="w-3.5 h-3.5 text-red-500" />,
-//   text: <Type className="w-3.5 h-3.5 text-green-500" />,
-// };
-
-// export default function CourseDetail() {
-//   const { id } = useParams<{ id: string }>();
-//   const courseId = parseInt(id!);
-//   const { t } = useI18n();
-//   const qc = useQueryClient();
-//   const [, navigate] = useLocation();
-//   const [expandedModules, setExpandedModules] = useState<Set<number>>(new Set());
-//   const [moduleDialog, setModuleDialog] = useState(false);
-//   const [lessonDialog, setLessonDialog] = useState<number | null>(null);
-
-//   const { data: course, isLoading } = useGetCourse(courseId, {
-//     query: { queryKey: getGetCourseQueryKey(courseId) },
-//   });
-
-//   const createModule = useCreateModule({
-//     mutation: {
-//       onSuccess: () => {
-//         qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
-//         setModuleDialog(false);
-//         moduleForm.reset();
-//         toast.success("Module added");
-//       },
-//     },
-//   });
-
-//   const createLesson = useCreateLesson({
-//     mutation: {
-//       onSuccess: (_, vars) => {
-//         qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
-//         setLessonDialog(null);
-//         lessonForm.reset();
-//         toast.success("Lesson added");
-//         setExpandedModules((prev) => new Set([...prev, vars.moduleId]));
-//       },
-//     },
-//   });
-
-//   const deleteLesson = useDeleteLesson({
-//     mutation: {
-//       onSuccess: () => {
-//         qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
-//         toast.success("Lesson deleted");
-//       },
-//     },
-//   });
-
-//   const moduleForm = useForm<{ title: string; titleAr: string; order: number }>({
-//     defaultValues: { order: 1 },
-//   });
-
-//   const lessonForm = useForm<{
-//     title: string;
-//     titleAr: string;
-//     type: "video" | "pdf" | "text";
-//     videoUrl: string;
-//     pdfUrl: string;
-//     duration: number;
-//     order: number;
-//   }>({
-//     defaultValues: { type: "video", order: 1 },
-//   });
-
-//   const toggleModule = (id: number) => {
-//     setExpandedModules((prev) => {
-//       const next = new Set(prev);
-//       next.has(id) ? next.delete(id) : next.add(id);
-//       return next;
-//     });
-//   };
-
-//   if (isLoading) {
-//     return (
-//       <div className="max-w-4xl mx-auto space-y-4">
-//         <div className="h-8 w-48 bg-muted animate-pulse rounded" />
-//         <div className="h-32 bg-card border border-card-border rounded-xl animate-pulse" />
-//       </div>
-//     );
-//   }
-
-//   if (!course) return <div className="text-center py-16 text-muted-foreground">Course not found</div>;
-
-//   return (
-//     <div className="max-w-4xl mx-auto space-y-5">
-//       <div className="flex items-center gap-3">
-//         <button
-//           onClick={() => navigate("/courses")}
-//           className="text-muted-foreground hover:text-foreground"
-//         >
-//           <ChevronLeft className="w-5 h-5" />
-//         </button>
-//         <div className="flex-1 min-w-0">
-//           <h1 className="text-xl font-bold truncate">{course.title}</h1>
-//           {course.titleAr && <p className="text-sm text-muted-foreground" dir="rtl">{course.titleAr}</p>}
-//         </div>
-//         <div className="flex items-center gap-3 shrink-0">
-//           <span className="text-lg font-bold text-primary">${course.price}</span>
-//           <span className="text-xs px-2 py-1 rounded-full bg-muted text-muted-foreground">{t(course.status)}</span>
-//         </div>
-//       </div>
-
-//       {course.description && (
-//         <p className="text-sm text-muted-foreground">{course.description}</p>
-//       )}
-
-//       <div className="flex items-center justify-between">
-//         <h2 className="text-sm font-semibold">{t("modules")} ({course.modules?.length ?? 0})</h2>
-//         <Button size="sm" variant="outline" onClick={() => setModuleDialog(true)} className="gap-1.5">
-//           <Plus className="w-3.5 h-3.5" />
-//           {t("addModule")}
-//         </Button>
-//       </div>
-
-//       <div className="space-y-3">
-//         {(course.modules ?? []).map((mod) => {
-//           const expanded = expandedModules.has(mod.id);
-//           return (
-//             <div key={mod.id} className="bg-card border border-card-border rounded-xl overflow-hidden">
-//               <button
-//                 className="w-full flex items-center justify-between px-4 py-3 text-start hover:bg-accent/50 transition-colors"
-//                 onClick={() => toggleModule(mod.id)}
-//               >
-//                 <div className="flex items-center gap-3">
-//                   {expanded ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
-//                   <span className="text-sm font-medium">{mod.title}</span>
-//                   {mod.titleAr && <span className="text-xs text-muted-foreground" dir="rtl">| {mod.titleAr}</span>}
-//                 </div>
-//                 <span className="text-xs text-muted-foreground">{mod.lessonCount} lessons</span>
-//               </button>
-
-//               {expanded && (
-//                 <div className="border-t border-border px-4 py-3 space-y-2 bg-background/50">
-//                   {(mod.lessons ?? []).map((lesson) => (
-//                     <div key={lesson.id} className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-accent/50 group">
-//                       {lessonIcons[lesson.type]}
-//                       <div className="flex-1 min-w-0">
-//                         <p className="text-sm truncate">{lesson.title}</p>
-//                         {lesson.duration && (
-//                           <p className="text-xs text-muted-foreground">{lesson.duration} min</p>
-//                         )}
-//                       </div>
-//                       <button
-//                         onClick={() => deleteLesson.mutate({ id: lesson.id })}
-//                         className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-//                       >
-//                         <Trash2 className="w-3.5 h-3.5" />
-//                       </button>
-//                     </div>
-//                   ))}
-//                   <button
-//                     onClick={() => {
-//                       setLessonDialog(mod.id);
-//                       lessonForm.setValue("order", (mod.lessonCount ?? 0) + 1);
-//                     }}
-//                     className="w-full flex items-center gap-2 py-2 px-3 text-xs text-muted-foreground hover:text-primary hover:bg-accent rounded-lg transition-colors"
-//                   >
-//                     <Plus className="w-3.5 h-3.5" />
-//                     {t("addLesson")}
-//                   </button>
-//                 </div>
-//               )}
-//             </div>
-//           );
-//         })}
-
-//         {(course.modules ?? []).length === 0 && (
-//           <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-xl">
-//             <p className="text-sm">No modules yet. Add your first module above.</p>
-//           </div>
-//         )}
-//       </div>
-
-//       <Dialog open={moduleDialog} onOpenChange={setModuleDialog}>
-//         <DialogContent>
-//           <DialogHeader><DialogTitle>{t("addModule")}</DialogTitle></DialogHeader>
-//           <form
-//             onSubmit={moduleForm.handleSubmit((data) =>
-//               createModule.mutate({
-//                 courseId,
-//                 data: { title: data.title, titleAr: data.titleAr || undefined, order: data.order },
-//               })
-//             )}
-//             className="space-y-4"
-//           >
-//             <div>
-//               <label className="text-sm font-medium">{t("name")} *</label>
-//               <Input {...moduleForm.register("title", { required: true })} className="mt-1" />
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("titleAr")}</label>
-//               <Input {...moduleForm.register("titleAr")} className="mt-1" dir="rtl" />
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("order")}</label>
-//               <Input {...moduleForm.register("order", { valueAsNumber: true })} type="number" min="1" className="mt-1" />
-//             </div>
-//             <DialogFooter>
-//               <Button variant="outline" type="button" onClick={() => setModuleDialog(false)}>{t("cancel")}</Button>
-//               <Button type="submit" disabled={createModule.isPending}>{t("save")}</Button>
-//             </DialogFooter>
-//           </form>
-//         </DialogContent>
-//       </Dialog>
-
-//       <Dialog open={lessonDialog !== null} onOpenChange={(o) => !o && setLessonDialog(null)}>
-//         <DialogContent>
-//           <DialogHeader><DialogTitle>{t("addLesson")}</DialogTitle></DialogHeader>
-//           <form
-//             onSubmit={lessonForm.handleSubmit((data) =>
-//               createLesson.mutate({
-//                 moduleId: lessonDialog!,
-//                 data: {
-//                   title: data.title,
-//                   titleAr: data.titleAr || undefined,
-//                   type: data.type,
-//                   videoUrl: data.videoUrl || undefined,
-//                   pdfUrl: data.pdfUrl || undefined,
-//                   duration: data.duration || undefined,
-//                   order: data.order,
-//                 },
-//               })
-//             )}
-//             className="space-y-4"
-//           >
-//             <div>
-//               <label className="text-sm font-medium">{t("name")} *</label>
-//               <Input {...lessonForm.register("title", { required: true })} className="mt-1" />
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("titleAr")}</label>
-//               <Input {...lessonForm.register("titleAr")} className="mt-1" dir="rtl" />
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("type")}</label>
-//               <select
-//                 {...lessonForm.register("type")}
-//                 className="mt-1 w-full h-9 px-3 border border-input rounded-md bg-background text-sm"
-//               >
-//                 <option value="video">{t("video")}</option>
-//                 <option value="pdf">{t("pdf")}</option>
-//                 <option value="text">{t("text")}</option>
-//               </select>
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("videoUrl")}</label>
-//               <Input {...lessonForm.register("videoUrl")} className="mt-1" placeholder="https://..." />
-//             </div>
-//             <div>
-//               <label className="text-sm font-medium">{t("pdfUrl")}</label>
-//               <Input {...lessonForm.register("pdfUrl")} className="mt-1" placeholder="https://..." />
-//             </div>
-//             <div className="grid grid-cols-2 gap-4">
-//               <div>
-//                 <label className="text-sm font-medium">{t("duration")}</label>
-//                 <Input {...lessonForm.register("duration", { valueAsNumber: true })} type="number" min="0" className="mt-1" />
-//               </div>
-//               <div>
-//                 <label className="text-sm font-medium">{t("order")}</label>
-//                 <Input {...lessonForm.register("order", { valueAsNumber: true })} type="number" min="1" className="mt-1" />
-//               </div>
-//             </div>
-//             <DialogFooter>
-//               <Button variant="outline" type="button" onClick={() => setLessonDialog(null)}>{t("cancel")}</Button>
-//               <Button type="submit" disabled={createLesson.isPending}>{t("save")}</Button>
-//             </DialogFooter>
-//           </form>
-//         </DialogContent>
-//       </Dialog>
-//     </div>
-//   );
-// }
-
-
 import { useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useI18n } from "@/lib/i18n";
@@ -792,35 +489,76 @@ export default function CourseDetail() {
   return (
     <div className="max-w-4xl mx-auto space-y-5" dir="rtl">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate("/courses")} className="text-muted-foreground hover:text-foreground">
-          <ChevronRight className="w-5 h-5" />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold truncate">{course.titleAr || course.title}</h1>
-            <span className={cn(
-              "text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0",
-              isLive
-                ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
-                : "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
-            )}>
-              {isLive ? "🔴 مباشر" : "🎬 مسجل"}
-            </span>
-          </div>
-          {course.title && course.titleAr && (
-            <p className="text-sm text-muted-foreground">{course.title}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <Button size="sm" variant="outline" onClick={() => setChatCourseId(courseId)} className="gap-1.5">
-            <MessageSquare className="w-3.5 h-3.5" />
-            شات الكورس
-          </Button>
-          <span className="text-lg font-bold text-primary">${course.price}</span>
-          <span className="text-xs px-2 py-1 rounded-full bg-muted text-muted-foreground">{t(course.status)}</span>
-        </div>
-      </div>
+      
+<div className="flex items-center gap-3">
+  <button onClick={() => navigate("/courses")} className="text-muted-foreground hover:text-foreground">
+    <ChevronRight className="w-5 h-5" />
+  </button>
+  <div className="flex-1 min-w-0">
+    <div className="flex items-center gap-2">
+      <h1 className="text-xl font-bold truncate">{course.titleAr || course.title}</h1>
+      <span className={cn(
+        "text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0",
+        isLive
+          ? "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400"
+          : "bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400"
+      )}>
+        {isLive ? "🔴 مباشر" : "🎬 مسجل"}
+      </span>
+    </div>
+    {course.title && course.titleAr && (
+      <p className="text-sm text-muted-foreground">{course.title}</p>
+    )}
+  </div>
+  <div className="flex items-center gap-3 shrink-0">
+    <Button size="sm" variant="outline" onClick={() => setChatCourseId(courseId)} className="gap-1.5">
+      <MessageSquare className="w-3.5 h-3.5" />
+      شات الكورس
+    </Button>
+    <span className="text-lg font-bold text-primary">${course.price}</span>
+
+    {/* ✅ زرار تغيير الـ status */}
+    <select
+      value={course.status}
+      onChange={async (e) => {
+        const token = localStorage.getItem("lms_admin_token");
+        const tenant = localStorage.getItem("tenant_slug");
+        const res = await fetch(`/api/courses/${courseId}?tenant=${tenant}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            title: course.title,
+            titleAr: course.titleAr ?? undefined,
+            description: course.description ?? undefined,
+            price: course.price,
+            status: e.target.value,
+            courseType: course.courseType ?? "recorded",
+            thumbnailUrl: course.thumbnailUrl ?? undefined,
+          }),
+        });
+        if (res.ok) {
+          qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
+          toast.success("تم تغيير حالة الكورس");
+        } else {
+          toast.error("فشل تغيير الحالة");
+        }
+      }}
+      className={cn(
+        "text-xs px-2 py-1 rounded-full border-0 font-semibold cursor-pointer",
+        course.status === "active" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
+        course.status === "draft" ? "bg-muted text-muted-foreground" :
+        "bg-amber-100 text-amber-700"
+      )}
+    >
+      <option value="active">✅ نشط</option>
+      <option value="draft">📝 مسودة</option>
+      <option value="archived">📦 مؤرشف</option>
+    </select>
+  </div>
+</div>
 
       {course.description && (
         <p className="text-sm text-muted-foreground">{course.description}</p>

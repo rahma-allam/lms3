@@ -7,6 +7,7 @@ import { Layout } from "@/components/layout/Layout";
 import { usePixels } from "@/hooks/usePixels";
 import { AdminAuthProvider, useAdminAuth } from "@/lib/adminAuth";
 import { TenantProvider, useTenant } from "@/hooks/useTenant";
+import { setAuthTokenGetter } from "@workspace/api-client-react";
 import Dashboard from "@/pages/Dashboard";
 import Courses from "@/pages/Courses";
 import CourseDetail from "@/pages/CourseDetail";
@@ -41,15 +42,24 @@ function AcademyNotFound() {
   );
 }
 
+// ✅ بيحط الـ admin token في الـ custom-fetch تلقائياً
+function TokenSetter() {
+  const { token } = useAdminAuth();
+  useEffect(() => {
+    setAuthTokenGetter(() => token);
+  }, [token]);
+  return null;
+}
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAdminAuth();
   const [, navigate] = useLocation();
 
   useEffect(() => {
-   if (!isLoading && !isAuthenticated) {
-  const tenant = localStorage.getItem("tenant_slug");
-  navigate(tenant ? `/login?tenant=${tenant}` : "/login");
-}
+    if (!isLoading && !isAuthenticated) {
+      const tenant = localStorage.getItem("tenant_slug");
+      navigate(tenant ? `/login?tenant=${tenant}` : "/login");
+    }
   }, [isLoading, isAuthenticated, navigate]);
 
   if (isLoading) return (
@@ -67,9 +77,9 @@ function InstructorAuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-  const tenant = localStorage.getItem("tenant_slug");
-  navigate(tenant ? `/instructor/login?tenant=${tenant}` : "/instructor/login");
-}
+      const tenant = localStorage.getItem("tenant_slug");
+      navigate(tenant ? `/instructor/login?tenant=${tenant}` : "/instructor/login");
+    }
   }, [isLoading, isAuthenticated, navigate]);
 
   if (isLoading) return (
@@ -116,28 +126,21 @@ function AppRoutes() {
   );
 }
 
-/**
- * Inner wrapper that has access to TenantProvider context.
- * Shows a 404 page if the academy slug/domain is unknown.
- */
 function AppWithTenantGuard() {
   const { isLoading, notFound } = useTenant();
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-      </div>
-    );
-  }
+  if (isLoading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-8 h-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+    </div>
+  );
 
-  if (notFound) {
-    return <AcademyNotFound />;
-  }
+  if (notFound) return <AcademyNotFound />;
 
   return (
     <InstructorAuthProvider>
       <AdminAuthProvider>
+        <TokenSetter />
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
           <AppRoutes />
         </WouterRouter>

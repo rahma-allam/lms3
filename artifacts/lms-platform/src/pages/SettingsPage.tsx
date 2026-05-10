@@ -10,7 +10,7 @@ import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Settings, Megaphone, Globe, KeyRound, ChevronDown, ChevronUp, Building2 } from "lucide-react";
+import { Settings, Megaphone, Globe, KeyRound, Building2 } from "lucide-react";
 
 interface SettingsForm {
   academyName: string;
@@ -24,37 +24,33 @@ interface SettingsForm {
   tiktokAccessToken: string;
   defaultLanguage: "en" | "ar";
   currency: string;
+  manualPaymentInstructions: string;
 }
 
-function PixelSection({
-  icon,
-  title,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  children: React.ReactNode;
-}) {
+function fetchWithAuth(url: string, options?: RequestInit) {
+  const token = localStorage.getItem("lms_admin_token");
+  const tenant = localStorage.getItem("tenant_slug");
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(`${url}${tenant ? `${sep}tenant=${tenant}` : ""}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options?.headers ?? {}),
+    },
+  });
+}
+
+function PixelSection({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
     <div className="border border-border rounded-lg p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        {icon}
-        <span className="text-sm font-medium">{title}</span>
-      </div>
+      <div className="flex items-center gap-2">{icon}<span className="text-sm font-medium">{title}</span></div>
       {children}
     </div>
   );
 }
 
-function FieldRow({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function FieldRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1">
       <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</label>
@@ -76,6 +72,8 @@ export default function SettingsPage() {
     mutation: {
       onSuccess: () => {
         qc.invalidateQueries({ queryKey: getGetSettingsQueryKey() });
+        // ✅ invalidate storefront cache عشان الـ Dashboard يتحدث
+        qc.invalidateQueries({ queryKey: ["/api/storefront/settings"] });
         toast.success("Settings saved");
       },
       onError: () => toast.error("Failed to save settings"),
@@ -98,6 +96,7 @@ export default function SettingsPage() {
         tiktokAccessToken: settings.tiktokAccessToken ?? "",
         defaultLanguage: settings.defaultLanguage,
         currency: settings.currency,
+        manualPaymentInstructions: settings.manualPaymentInstructions ?? "",
       });
     }
   }, [settings, reset]);
@@ -131,11 +130,13 @@ export default function SettingsPage() {
               tiktokAccessToken: data.tiktokAccessToken || undefined,
               defaultLanguage: data.defaultLanguage,
               currency: data.currency,
+              manualPaymentInstructions: data.manualPaymentInstructions || undefined,
             },
           })
         )}
         className="space-y-6"
       >
+        {/* General Settings */}
         <div className="bg-card border border-card-border rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2 mb-2">
             <Settings className="w-4 h-4 text-primary" />
@@ -161,20 +162,14 @@ export default function SettingsPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">{t("defaultLanguage")}</label>
-              <select
-                {...register("defaultLanguage")}
-                className="mt-1 w-full h-9 px-3 border border-input rounded-md bg-background text-sm"
-              >
+              <select {...register("defaultLanguage")} className="mt-1 w-full h-9 px-3 border border-input rounded-md bg-background text-sm">
                 <option value="en">English</option>
                 <option value="ar">العربية</option>
               </select>
             </div>
             <div>
               <label className="text-sm font-medium">{t("currency")}</label>
-              <select
-                {...register("currency")}
-                className="mt-1 w-full h-9 px-3 border border-input rounded-md bg-background text-sm"
-              >
+              <select {...register("currency")} className="mt-1 w-full h-9 px-3 border border-input rounded-md bg-background text-sm">
                 <option value="USD">USD ($)</option>
                 <option value="SAR">SAR (ر.س)</option>
                 <option value="AED">AED (د.إ)</option>
@@ -184,8 +179,21 @@ export default function SettingsPage() {
               </select>
             </div>
           </div>
+
+          {/* ✅ Manual Payment Instructions */}
+          <div>
+            <label className="text-sm font-medium">Manual Payment Instructions</label>
+            <textarea
+              {...register("manualPaymentInstructions")}
+              className="mt-1 w-full min-h-[80px] px-3 py-2 border border-input rounded-md bg-background text-sm resize-y"
+              placeholder="أرسل المبلغ على الحساب رقم ..."
+              dir="auto"
+            />
+            <p className="text-[11px] text-muted-foreground mt-1">تظهر للطالب عند اختيار الدفع اليدوي</p>
+          </div>
         </div>
 
+        {/* Marketing Pixels */}
         <div className="bg-card border border-card-border rounded-xl p-5 space-y-4">
           <div className="flex items-center gap-2 mb-1">
             <Megaphone className="w-4 h-4 text-primary" />
@@ -195,103 +203,46 @@ export default function SettingsPage() {
 
           <div className="space-y-4 pt-1">
             <PixelSection
-              icon={
-                <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center shrink-0">
-                  <span className="text-white text-[10px] font-bold">f</span>
-                </div>
-              }
+              icon={<div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center shrink-0"><span className="text-white text-[10px] font-bold">f</span></div>}
               title="Meta (Facebook) Pixel"
             >
-              <FieldRow
-                label="Pixel ID"
-                hint="Fires PageView on every page and Purchase on successful payments (browser-side)."
-              >
-                <Input
-                  {...register("metaPixelId")}
-                  placeholder="e.g. 1234567890123456"
-                  className="font-mono text-xs"
-                />
+              <FieldRow label="Pixel ID" hint="Fires PageView on every page and Purchase on successful payments.">
+                <Input {...register("metaPixelId")} placeholder="e.g. 1234567890123456" className="font-mono text-xs" />
               </FieldRow>
-              <FieldRow
-                label="Conversions API Access Token"
-                hint="Server-side Purchase event via Conversions API — reaches users blocked by ad blockers."
-              >
+              <FieldRow label="Conversions API Access Token" hint="Server-side Purchase event via Conversions API.">
                 <div className="relative">
                   <KeyRound className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    {...register("metaConversionToken")}
-                    type="password"
-                    placeholder="EAAxxxxxxxxxxxxxxxx..."
-                    className="font-mono text-xs pl-8"
-                  />
+                  <Input {...register("metaConversionToken")} type="password" placeholder="EAAxxxxxxxxxxxxxxxx..." className="font-mono text-xs pl-8" />
                 </div>
               </FieldRow>
             </PixelSection>
 
             <PixelSection
-              icon={
-                <div className="w-6 h-6 rounded bg-red-500 flex items-center justify-center shrink-0">
-                  <Globe className="w-3.5 h-3.5 text-white" />
-                </div>
-              }
+              icon={<div className="w-6 h-6 rounded bg-red-500 flex items-center justify-center shrink-0"><Globe className="w-3.5 h-3.5 text-white" /></div>}
               title="Google Tag / Google Analytics"
             >
-              <FieldRow
-                label="Tag ID"
-                hint="Use GTM-XXXXXXX for Google Tag Manager, or G-XXXXXXXXXX for GA4. Fires page_view on every navigation and purchase on payments."
-              >
-                <Input
-                  {...register("googleTagId")}
-                  placeholder="GTM-XXXXXXX  or  G-XXXXXXXXXX"
-                  className="font-mono text-xs"
-                />
+              <FieldRow label="Tag ID" hint="Use GTM-XXXXXXX for Google Tag Manager, or G-XXXXXXXXXX for GA4.">
+                <Input {...register("googleTagId")} placeholder="GTM-XXXXXXX  or  G-XXXXXXXXXX" className="font-mono text-xs" />
               </FieldRow>
-              <FieldRow
-                label="GA4 Measurement Protocol API Secret"
-                hint="Required for server-side purchase events via Measurement Protocol. Get it in GA4 → Admin → Data Streams → Measurement Protocol API secrets."
-              >
+              <FieldRow label="GA4 Measurement Protocol API Secret" hint="Required for server-side purchase events.">
                 <div className="relative">
                   <KeyRound className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    {...register("googleApiSecret")}
-                    type="password"
-                    placeholder="api_secret value"
-                    className="font-mono text-xs pl-8"
-                  />
+                  <Input {...register("googleApiSecret")} type="password" placeholder="api_secret value" className="font-mono text-xs pl-8" />
                 </div>
               </FieldRow>
             </PixelSection>
 
             <PixelSection
-              icon={
-                <div className="w-6 h-6 rounded bg-black flex items-center justify-center shrink-0">
-                  <span className="text-white text-[10px] font-bold">T</span>
-                </div>
-              }
+              icon={<div className="w-6 h-6 rounded bg-black flex items-center justify-center shrink-0"><span className="text-white text-[10px] font-bold">T</span></div>}
               title="TikTok Pixel"
             >
-              <FieldRow
-                label="Pixel ID"
-                hint="Fires PageView on every page and CompletePayment on successful payments (browser-side)."
-              >
-                <Input
-                  {...register("tiktokPixelId")}
-                  placeholder="Enter your TikTok Pixel ID"
-                  className="font-mono text-xs"
-                />
+              <FieldRow label="Pixel ID" hint="Fires PageView and CompletePayment on successful payments.">
+                <Input {...register("tiktokPixelId")} placeholder="Enter your TikTok Pixel ID" className="font-mono text-xs" />
               </FieldRow>
-              <FieldRow
-                label="Events API Access Token"
-                hint="Server-side CompletePayment event via TikTok Events API — improves match rate significantly."
-              >
+              <FieldRow label="Events API Access Token" hint="Server-side CompletePayment event via TikTok Events API.">
                 <div className="relative">
                   <KeyRound className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    {...register("tiktokAccessToken")}
-                    type="password"
-                    placeholder="TikTok Events API access token"
-                    className="font-mono text-xs pl-8"
-                  />
+                  <Input {...register("tiktokAccessToken")} type="password" placeholder="TikTok Events API access token" className="font-mono text-xs pl-8" />
                 </div>
               </FieldRow>
             </PixelSection>
@@ -315,7 +266,8 @@ function AcademyProfileSection() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    fetch("/api/academy-profile")
+    // ✅ fetchWithAuth بدل fetch العادي
+    fetchWithAuth("/api/academy-profile")
       .then((r) => r.ok ? r.json() : {})
       .then((data) => setProfile(data ?? {}))
       .catch(() => {});
@@ -328,15 +280,15 @@ function AcademyProfileSection() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await fetch("/api/academy-profile", {
+      await fetchWithAuth("/api/academy-profile", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(profile),
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      toast.success("Academy profile saved");
     } catch {
-      // silent
+      toast.error("Failed to save profile");
     } finally {
       setSaving(false);
     }
@@ -373,13 +325,7 @@ function AcademyProfileSection() {
         {textFields.map(({ key, label, dir }) => (
           <div key={key} className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</label>
-            <Input
-              value={profile[key] ?? ""}
-              onChange={(e) => handleChange(key, e.target.value)}
-              dir={dir}
-              placeholder={label}
-              className="text-sm"
-            />
+            <Input value={profile[key] ?? ""} onChange={(e) => handleChange(key, e.target.value)} dir={dir} placeholder={label} className="text-sm" />
           </div>
         ))}
       </div>

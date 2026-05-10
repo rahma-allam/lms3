@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Navbar from "@/components/Navbar";
+import { useQuery } from "@tanstack/react-query";
 
 const PAYMENT_METHODS = [
   { id: "vodafone_cash", label: "Vodafone Cash",   labelAr: "فودافون كاش", color: "bg-red-600",     method: "cash"         as const },
@@ -51,12 +52,16 @@ export default function CheckoutPage() {
   }, [authLoading, user, courseId, navigate]);
 
   // ─── جلب بيانات الكورس ───────────────────────────────────────────────────
-  const { data: course, isLoading: courseLoading } = useGetCourse(parseInt(courseId || "0"), {
-    query: {
-      queryKey: getGetCourseQueryKey(parseInt(courseId || "0")),
-      enabled: !!courseId && !!user,
-    },
-  });
+const { data: course, isLoading: courseLoading } = useQuery({
+  queryKey: ["/api/storefront/course", courseId],
+  queryFn: async () => {
+    const tenant = localStorage.getItem("tenant_slug");
+    const res = await fetch(`/api/storefront/courses/${courseId}${tenant ? `?tenant=${tenant}` : ""}`);
+    if (!res.ok) throw new Error("Course not found");
+    return res.json();
+  },
+  enabled: !!courseId && !!user,
+});
 
   const courseTitle = lang === "en"
     ? (course?.title ?? "")
@@ -100,7 +105,8 @@ export default function CheckoutPage() {
     setCouponLoading(true);
     setCouponError(null);
     try {
-      const res = await fetch("/api/coupons/validate", {
+      const tenant = localStorage.getItem("tenant_slug");
+      const res = await fetch(`/api/coupons/validate${tenant ? `?tenant=${tenant}` : ""}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: couponInput.trim(), courseId: courseId ? parseInt(courseId) : undefined }),
@@ -139,6 +145,7 @@ export default function CheckoutPage() {
   };
 
   const handleConfirm = async () => {
+    
     if (!user) { navigate("/login"); return; }
 
     setIsSubmitting(true);
@@ -148,7 +155,11 @@ export default function CheckoutPage() {
     if (receiptFile) {
       const formData = new FormData();
       formData.append("receipt", receiptFile);
-      const uploadRes = await fetch("/api/payments/upload-receipt", { method: "POST", body: formData });
+      // في handleConfirm — رفع الإيصال
+const tenant = localStorage.getItem("tenant_slug");
+const uploadRes = await fetch(`/api/payments/upload-receipt${tenant ? `?tenant=${tenant}` : ""}`, {
+  method: "POST", body: formData
+});
       if (uploadRes.ok) {
         receiptUrl = (await uploadRes.json()).receiptUrl;
       } else {

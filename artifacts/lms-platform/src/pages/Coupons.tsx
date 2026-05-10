@@ -14,8 +14,22 @@ type Coupon = {
   maxUses: number | null; usedCount: number; courseId: number | null;
   expiresAt: string | null; isActive: boolean; createdAt: string;
 };
+const fetchWithAuth = (url: string, options?: RequestInit) => {
+  const token = localStorage.getItem("lms_admin_token");
+  const tenant = localStorage.getItem("tenant_slug");
+  const sep = url.includes("?") ? "&" : "?";
+  return fetch(`${url}${tenant ? `${sep}tenant=${tenant}` : ""}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
+  });
+};
 
-const fetchCoupons = (): Promise<Coupon[]> => fetch("/api/coupons").then((r) => r.json());
+const fetchCoupons =  (): Promise<Coupon[]> => 
+  fetchWithAuth("/api/categories").then((r) => r.json());
 
 export default function Coupons() {
   const { t } = useI18n();

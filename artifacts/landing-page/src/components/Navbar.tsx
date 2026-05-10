@@ -6,16 +6,18 @@ import { Moon, Sun, Languages, UserCircle, LogIn, GraduationCap } from "lucide-r
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
-// import { useGetSettings, getGetSettingsQueryKey } from "@workspace/api-client-react";
-
 import { useQuery } from "@tanstack/react-query";
 import { fetchStorefront } from "@/lib/api";
+
 export default function Navbar() {
   const { lang, setLang, t } = useI18n();
   const { theme, setTheme } = useTheme();
   const { user, logout, isAuthenticated } = useAuth();
   const [scrolled, setScrolled] = useState(false);
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+
+  // ✅ هل احنا على الصفحة الرئيسية؟
+  const isHome = location === "/" || location === "";
 
   const { data: settings } = useQuery<any>({
     queryKey: ["/api/storefront/settings"],
@@ -23,8 +25,16 @@ export default function Navbar() {
     staleTime: 60_000,
   });
 
-  const academyName = settings?.academyName || "EduAcademy Pro";
+  const academyName = lang === "ar" 
+  ? (settings?.academyNameAr || settings?.academyName || "EduAcademy Pro")
+  : (settings?.academyName || "EduAcademy Pro");
   const logoUrl = settings?.logoUrl;
+
+  // ✅ رابط الصفحة الرئيسية مع الـ tenant
+  const homeUrl = () => {
+    const tenant = localStorage.getItem("tenant_slug");
+    return tenant ? `/?tenant=${tenant}` : "/";
+  };
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 20);
@@ -34,7 +44,11 @@ export default function Navbar() {
 
   const handleLogout = () => {
     logout();
-    navigate("/");
+    navigate(homeUrl());
+  };
+
+  const handleLogoClick = () => {
+    navigate(homeUrl());
   };
 
   return (
@@ -47,10 +61,9 @@ export default function Navbar() {
       )}
     >
       <div className="container mx-auto px-4 md:px-6 flex items-center justify-between">
-        <div
-          className="flex items-center gap-2 cursor-pointer"
-          onClick={() => navigate("/")}
-        >
+
+        {/* ✅ اللوجو + اسم الأكاديمية */}
+        <div className="flex items-center gap-2 cursor-pointer" onClick={handleLogoClick}>
           {logoUrl ? (
             <img src={logoUrl} alt={academyName} className="w-8 h-8 rounded-lg object-cover" />
           ) : (
@@ -61,13 +74,18 @@ export default function Navbar() {
           <span className="font-bold text-xl hidden sm:inline-block">{academyName}</span>
         </div>
 
-        <nav className="hidden md:flex items-center gap-8">
-          <a href="#features" className="text-sm font-medium hover:text-primary transition-colors">{t('nav.features')}</a>
-          <a href="#courses" className="text-sm font-medium hover:text-primary transition-colors">{t('nav.courses')}</a>
-          <a href="#testimonials" className="text-sm font-medium hover:text-primary transition-colors">{t('nav.testimonials')}</a>
-        </nav>
+        {/* ✅ الـ nav links بتظهر بس في الصفحة الرئيسية */}
+        {isHome && (
+          <nav className="hidden md:flex items-center gap-8">
+            <a href="#features" className="text-sm font-medium hover:text-primary transition-colors">{t("nav.features")}</a>
+            <a href="#courses" className="text-sm font-medium hover:text-primary transition-colors">{t("nav.courses")}</a>
+            <a href="#testimonials" className="text-sm font-medium hover:text-primary transition-colors">{t("nav.testimonials")}</a>
+          </nav>
+        )}
 
+        {/* الجانب الأيمن */}
         <div className="flex items-center gap-2">
+          {/* ✅ زرار اللغة */}
           <Button
             variant="ghost"
             size="icon"
@@ -78,6 +96,7 @@ export default function Navbar() {
             <Languages className="h-5 w-5" />
           </Button>
 
+          {/* ✅ زرار الثيم */}
           <Button
             variant="ghost"
             size="icon"
@@ -111,7 +130,10 @@ export default function Navbar() {
                 variant="ghost"
                 size="sm"
                 className="gap-2"
-                onClick={() => navigate("/login")}
+                onClick={() => {
+                  const tenant = localStorage.getItem("tenant_slug");
+                  navigate(tenant ? `/login?tenant=${tenant}` : "/login");
+                }}
               >
                 <LogIn className="w-4 h-4" />
                 <span className="hidden xs:inline">{lang === "ar" ? "دخول" : "Login"}</span>
@@ -120,7 +142,10 @@ export default function Navbar() {
               <Button
                 size="sm"
                 className="rounded-full px-5"
-                onClick={() => navigate("/register")}
+                onClick={() => {
+                  const tenant = localStorage.getItem("tenant_slug");
+                  navigate(tenant ? `/register?tenant=${tenant}` : "/register");
+                }}
               >
                 {lang === "ar" ? "ابدأ الآن" : "Join Now"}
               </Button>

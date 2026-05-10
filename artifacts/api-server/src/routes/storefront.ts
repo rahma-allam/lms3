@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
+import { db, modulesTable, studentsTable } from "@workspace/db";
 import { coursesTable, settingsTable, categoriesTable, tenantsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 const router = Router();
 
@@ -66,5 +66,51 @@ router.get("/categories", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+router.get("/courses/:id", async (req, res) => {
+  try {
+    const tenantId = req.tenantId ?? (await getDefaultTenantId());
+    const courseId = parseInt(req.params.id!);
 
+    const [course] = await db
+      .select()
+      .from(coursesTable)
+      .where(and(
+        eq(coursesTable.id, courseId),
+        eq(coursesTable.tenantId, tenantId),
+        eq(coursesTable.status, "active")
+      ));
+
+    if (!course) return res.status(404).json({ error: "Course not found" });
+
+    const [moduleCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(modulesTable)
+      .where(eq(modulesTable.courseId, courseId));
+
+    const [studentCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(studentsTable)
+      .where(and(eq(studentsTable.courseId, courseId), eq(studentsTable.tenantId, tenantId)));
+
+    res.json({
+      id: course.id,
+      title: course.title,
+      titleAr: course.titleAr ?? null,
+      description: course.description ?? null,
+      price: Number(course.price),
+      status: course.status,
+      courseType: course.courseType ?? "recorded",
+      thumbnailUrl: course.thumbnailUrl ?? null,
+      categoryId: course.categoryId ?? null,
+      level: course.level ?? null,
+      language: course.language ?? null,
+      totalHours: course.totalHours ? Number(course.totalHours) : null,
+      isFeatured: course.isFeatured ?? false,
+      studentCount: studentCount?.count ?? 0,
+      moduleCount: moduleCount?.count ?? 0,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 export default router;

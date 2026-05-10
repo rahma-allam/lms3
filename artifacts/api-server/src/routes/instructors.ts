@@ -1,4 +1,3 @@
-
 import bcrypt from "bcryptjs";
 import { Router } from "express";
 import { coursesTable, db } from "@workspace/db";
@@ -16,7 +15,6 @@ import multer from "multer";
 
 const router = Router();
 
-// ─── مجلد المرفقات ────────────────────────────────────────────────────────
 const ATTACHMENTS_DIR = path.join(process.cwd(), "private-attachments");
 if (!fs.existsSync(ATTACHMENTS_DIR)) fs.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
 
@@ -29,17 +27,18 @@ const attachmentStorage = multer.diskStorage({
 });
 const uploadAttachment = multer({
   storage: attachmentStorage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+  limits: { fileSize: 50 * 1024 * 1024 },
 });
 
-// ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
 // المدربين
-// ══════════════════════════════════════════════════════════════════════════
-
-
+// ══════════════════════════════════════════════════════════════
 
 router.get("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
     const instructors = await db
       .select({
         id: instructorsTable.id,
@@ -54,7 +53,9 @@ router.get("/", async (req, res) => {
         createdAt: instructorsTable.createdAt,
       })
       .from(instructorsTable)
+      .where(eq(instructorsTable.tenantId, tenantId))
       .orderBy(desc(instructorsTable.createdAt));
+
     res.json(instructors);
   } catch (err) {
     req.log.error({ err }, "Error listing instructors");
@@ -64,15 +65,23 @@ router.get("/", async (req, res) => {
 
 router.post("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
     const { name, nameAr, email, phone, bio, bioAr, password } = req.body;
     if (!name || !email || !password)
       return res.status(400).json({ error: "الاسم والإيميل وكلمة السر مطلوبين" });
 
-    const hashed = await bcrypt.hash(password, 10);  // ← hash الباسورد
+    const hashed = await bcrypt.hash(password, 10);
 
     const [instructor] = await db
       .insert(instructorsTable)
-      .values({ name, nameAr: nameAr ?? null, email, password: hashed, phone: phone ?? null, bio: bio ?? null, bioAr: bioAr ?? null })
+      .values({
+        tenantId,
+        name, nameAr: nameAr ?? null, email,
+        password: hashed, phone: phone ?? null,
+        bio: bio ?? null, bioAr: bioAr ?? null,
+      })
       .returning({
         id: instructorsTable.id,
         name: instructorsTable.name,
@@ -93,31 +102,32 @@ router.post("/", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 router.put("/:id", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
     const id = parseInt(req.params.id!);
     const { name, nameAr, email, phone, bio, bioAr, isActive, password } = req.body;
 
     const updateData: Record<string, any> = {
-      name,
-      nameAr: nameAr ?? null,
-      email,
-      phone: phone ?? null,
-      bio: bio ?? null,
-      bioAr: bioAr ?? null,
-      isActive,
+      name, nameAr: nameAr ?? null, email,
+      phone: phone ?? null, bio: bio ?? null,
+      bioAr: bioAr ?? null, isActive,
     };
 
-    // لو بعتوا password جديد مش فاضي، عمل hash وحطه
     if (password && password.trim() !== "") {
       updateData["password"] = await bcrypt.hash(password, 10);
     }
-    // لو password فاضي أو مش موجود، متعملش update للباسورد خالص
 
     const [instructor] = await db
       .update(instructorsTable)
       .set(updateData)
-      .where(eq(instructorsTable.id, id))
+      .where(and(
+        eq(instructorsTable.id, id),
+        eq(instructorsTable.tenantId, tenantId)
+      ))
       .returning({
         id: instructorsTable.id,
         name: instructorsTable.name,
@@ -141,8 +151,14 @@ router.put("/:id", async (req, res) => {
 
 router.delete("/:id", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
     const id = parseInt(req.params.id!);
-    await db.delete(instructorsTable).where(eq(instructorsTable.id, id));
+    await db.delete(instructorsTable).where(and(
+      eq(instructorsTable.id, id),
+      eq(instructorsTable.tenantId, tenantId)
+    ));
     res.status(204).send();
   } catch (err) {
     req.log.error({ err }, "Error deleting instructor");
@@ -152,17 +168,22 @@ router.delete("/:id", async (req, res) => {
 
 router.post("/:id/assign-course", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
     const instructorId = parseInt(req.params.id!);
     const { courseId } = req.body;
 
-    const [existing] = await db
-      .select()
-      .from(courseInstructorsTable)
+    // تأكد إن المدرب والكورس تابعين لنفس الأكاديمية
+    const [instructor] = await db.select().from(instructorsTable)
+      .where(and(eq(instructorsTable.id, instructorId), eq(instructorsTable.tenantId, tenantId)));
+    if (!instructor) return res.status(404).json({ error: "المدرب غير موجود" });
+
+    const [existing] = await db.select().from(courseInstructorsTable)
       .where(and(
         eq(courseInstructorsTable.instructorId, instructorId),
         eq(courseInstructorsTable.courseId, courseId)
       ));
-
     if (existing) return res.status(400).json({ error: "المدرب مسند للكورس ده بالفعل" });
 
     const [assignment] = await db
@@ -176,25 +197,65 @@ router.post("/:id/assign-course", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-router.get("/:id/courses", async (req, res) => {
-  const id = parseInt(req.params.id!);
-  const courses = await db
-    .select({ 
-      id: coursesTable.id, 
-      title: coursesTable.title, 
-      titleAr: coursesTable.titleAr 
-    })
-    .from(courseInstructorsTable)
-    .innerJoin(coursesTable, eq(courseInstructorsTable.courseId, coursesTable.id))
-    .where(eq(courseInstructorsTable.instructorId, id));
-  res.json(courses);
+
+router.delete("/:id/unassign-course", async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
+
+    const instructorId = parseInt(req.params.id!);
+    const { courseId } = req.body;
+    if (!courseId) return res.status(400).json({ error: "courseId is required" });
+
+    // تأكد إن المدرب تابع لنفس الأكاديمية
+    const [instructor] = await db.select().from(instructorsTable)
+      .where(and(eq(instructorsTable.id, instructorId), eq(instructorsTable.tenantId, tenantId)));
+    if (!instructor) return res.status(404).json({ error: "المدرب غير موجود" });
+
+    await db.delete(courseInstructorsTable).where(and(
+      eq(courseInstructorsTable.instructorId, instructorId),
+      eq(courseInstructorsTable.courseId, courseId)
+    ));
+
+    res.json({ success: true });
+  } catch (err) {
+    req.log.error({ err }, "Error unassigning course");
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
-// ══════════════════════════════════════════════════════════════════════════
-// الشات
-// ══════════════════════════════════════════════════════════════════════════
+router.get("/:id/courses", async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    if (!tenantId) return res.status(400).json({ error: "Academy not found" });
 
-// جلب رسائل الشات الجماعي + polling (since=timestamp)
+    const id = parseInt(req.params.id!);
+    const courses = await db
+      .select({
+        id: coursesTable.id,
+        title: coursesTable.title,
+        titleAr: coursesTable.titleAr,
+        courseType: coursesTable.courseType,
+        status: coursesTable.status,
+      })
+      .from(courseInstructorsTable)
+      .innerJoin(coursesTable, eq(courseInstructorsTable.courseId, coursesTable.id))
+      .where(and(
+        eq(courseInstructorsTable.instructorId, id),
+        eq(coursesTable.tenantId, tenantId)
+      ));
+
+    res.json(courses);
+  } catch (err) {
+    req.log.error({ err }, "Error fetching instructor courses");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// الشات
+// ══════════════════════════════════════════════════════════════
+
 router.get("/chat/:courseId", async (req, res) => {
   try {
     const courseId = parseInt(req.params.courseId as string);
@@ -203,23 +264,17 @@ router.get("/chat/:courseId", async (req, res) => {
     const messages = await db
       .select()
       .from(messagesTable)
-      .where(
-        and(
-          eq(messagesTable.courseId, courseId),
-          isNull(messagesTable.recipientStudentId),
-          since
-            ? sql`${messagesTable.createdAt} > ${new Date(since as string)}`
-            : undefined
-        )
-      )
+      .where(and(
+        eq(messagesTable.courseId, courseId),
+        isNull(messagesTable.recipientStudentId),
+        since ? sql`${messagesTable.createdAt} > ${new Date(since as string)}` : undefined
+      ))
       .orderBy(messagesTable.createdAt)
       .limit(100);
 
     const withAttachments = await Promise.all(
       messages.map(async (msg) => {
-        const attachments = await db
-          .select()
-          .from(messageAttachmentsTable)
+        const attachments = await db.select().from(messageAttachmentsTable)
           .where(eq(messageAttachmentsTable.messageId, msg.id));
         return { ...msg, attachments };
       })
@@ -232,7 +287,6 @@ router.get("/chat/:courseId", async (req, res) => {
   }
 });
 
-// جلب الشات الخاص بين مدرب وطالب
 router.get("/chat/:courseId/private/:studentId", async (req, res) => {
   try {
     const courseId = parseInt(req.params.courseId as string);
@@ -242,23 +296,17 @@ router.get("/chat/:courseId/private/:studentId", async (req, res) => {
     const messages = await db
       .select()
       .from(messagesTable)
-      .where(
-        and(
-          eq(messagesTable.courseId, courseId),
-          eq(messagesTable.recipientStudentId, studentId),
-          since
-            ? sql`${messagesTable.createdAt} > ${new Date(since as string)}`
-            : undefined
-        )
-      )
+      .where(and(
+        eq(messagesTable.courseId, courseId),
+        eq(messagesTable.recipientStudentId, studentId),
+        since ? sql`${messagesTable.createdAt} > ${new Date(since as string)}` : undefined
+      ))
       .orderBy(messagesTable.createdAt)
       .limit(100);
 
     const withAttachments = await Promise.all(
       messages.map(async (msg) => {
-        const attachments = await db
-          .select()
-          .from(messageAttachmentsTable)
+        const attachments = await db.select().from(messageAttachmentsTable)
           .where(eq(messageAttachmentsTable.messageId, msg.id));
         return { ...msg, attachments };
       })
@@ -271,7 +319,6 @@ router.get("/chat/:courseId/private/:studentId", async (req, res) => {
   }
 });
 
-// إرسال رسالة مع مرفقات اختيارية
 router.post("/chat/:courseId", uploadAttachment.array("attachments", 5), async (req, res) => {
   try {
     const courseId = parseInt(req.params.courseId as string);
@@ -280,11 +327,8 @@ router.post("/chat/:courseId", uploadAttachment.array("attachments", 5), async (
     if (!senderType || !senderId || !senderName)
       return res.status(400).json({ error: "بيانات المُرسِل مطلوبة" });
 
-    // تحقق إن المدرب مسند لهذا الكورس فعلاً
     if (senderType === "instructor") {
-      const [assigned] = await db
-        .select()
-        .from(courseInstructorsTable)
+      const [assigned] = await db.select().from(courseInstructorsTable)
         .where(and(
           eq(courseInstructorsTable.instructorId, parseInt(senderId)),
           eq(courseInstructorsTable.courseId, courseId)
@@ -331,16 +375,11 @@ router.post("/chat/:courseId", uploadAttachment.array("attachments", 5), async (
   }
 });
 
-// تحميل مرفق
 router.get("/attachments/:filename", async (req, res) => {
   try {
     const { filename } = req.params;
-
-    const [attachment] = await db
-      .select()
-      .from(messageAttachmentsTable)
+    const [attachment] = await db.select().from(messageAttachmentsTable)
       .where(eq(messageAttachmentsTable.storedFilename, filename!));
-
     if (!attachment) return res.status(404).json({ error: "الملف غير موجود" });
 
     const filePath = path.join(ATTACHMENTS_DIR, filename!);
