@@ -12,7 +12,7 @@ import {
   getListCoursesQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, TrendingUp, Clock, CreditCard, CheckCircle } from "lucide-react";
+import { Plus, TrendingUp, Clock, CreditCard, CheckCircle, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -144,6 +144,7 @@ export default function Payments() {
                   <th className="text-start px-4 py-3 font-medium text-muted-foreground">{t("method")}</th>
                   <th className="text-start px-4 py-3 font-medium text-muted-foreground">{t("status")}</th>
                   <th className="text-start px-4 py-3 font-medium text-muted-foreground">{t("date")}</th>
+                  <th className="text-start px-4 py-3 font-medium text-muted-foreground">إيصال</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -160,6 +161,20 @@ export default function Payments() {
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">
                       {new Date(p.createdAt).toLocaleDateString()}
+                    </td>
+                    {/* ✅ عرض الإيصال */}
+                    <td className="px-4 py-3">
+                      {(p as any).receiptUrl ? (
+                        <button
+                          onClick={() => window.open((p as any).receiptUrl, "_blank")}
+                          className="text-xs text-primary hover:underline flex items-center gap-1"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          عرض
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
