@@ -379,6 +379,9 @@ export default function StudentPortal() {
     queryKey: ["student-course", user?.courseId],
     queryFn: () => fetchWithStudentAuth(`/api/storefront/courses/${user!.courseId}`),
     enabled: !!user?.courseId,
+    staleTime: 0,              // دايماً اعتبر البيانات قديمة
+    refetchOnWindowFocus: true, // اجيب من جديد لما الطالب يرجع للتاب
+    refetchInterval: 60_000,   // وكل دقيقة في الخلفية
   });
 
   const isActive = student?.status === "active";
@@ -402,6 +405,19 @@ export default function StudentPortal() {
     setTimeout(() => refetchStudent(), 500);
   };
 
+  // ✅ enrollments و certificates — لازم تكون قبل أي early return
+  const { data: enrollments } = useQuery<any[]>({
+    queryKey: [`/api/enrollments?studentId=${user?.id}`],
+    queryFn: () => fetchWithStudentAuth(`/api/enrollments?studentId=${user!.id}`),
+    enabled: !!user?.id,
+  });
+
+  const { data: myCerts } = useQuery<any[]>({
+    queryKey: [`/api/certificates/student/${user?.id}`],
+    queryFn: () => fetchWithStudentAuth(`/api/certificates/student/${user!.id}`),
+    enabled: !!user?.id,
+  });
+
   useEffect(() => {
     if (!authLoading && !user) {
       const tenant = localStorage.getItem("tenant_slug");
@@ -409,26 +425,17 @@ export default function StudentPortal() {
     }
   }, [authLoading, user, navigate]);
 
-  if (authLoading || !user) {
+  // لا نستخدم early return هنا عشان ما نكسرش Rules of Hooks
+  // بدله بنرجع loading UI كجزء من الـ render العادي
+  const isReady = !authLoading && !!user;
+
+  if (!isReady) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin text-primary" />
       </div>
     );
   }
-
-  // ✅ enrollments و certificates
-  const { data: enrollments } = useQuery<any[]>({
-    queryKey: [`/api/enrollments?studentId=${user.id}`],
-    queryFn: () => fetchWithStudentAuth(`/api/enrollments?studentId=${user.id}`),
-    enabled: !!user?.id,
-  });
-
-  const { data: myCerts } = useQuery<any[]>({
-    queryKey: [`/api/certificates/student/${user.id}`],
-    queryFn: () => fetchWithStudentAuth(`/api/certificates/student/${user.id}`),
-    enabled: !!user?.id,
-  });
 
   const tabs: { key: Tab; label: string; icon: typeof User }[] = [
     { key: "overview",      label: lang === "ar" ? "نظرة عامة" : "Overview",     icon: User },

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { db, modulesTable, studentsTable } from "@workspace/db";
+import { db, modulesTable, studentsTable, lessonsTable, courseSessionsTable } from "@workspace/db";
 import { coursesTable, settingsTable, categoriesTable, tenantsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -82,15 +82,53 @@ router.get("/courses/:id", async (req, res) => {
 
     if (!course) return res.status(404).json({ error: "Course not found" });
 
-    const [moduleCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(modulesTable)
-      .where(eq(modulesTable.courseId, courseId));
-
     const [studentCount] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(studentsTable)
       .where(and(eq(studentsTable.courseId, courseId), eq(studentsTable.tenantId, tenantId)));
+
+    // جيب الـ modules مع الـ lessons كاملة (بما فيها videoUrl)
+    const modulesRaw = await db
+      .select()
+      .from(modulesTable)
+      .where(eq(modulesTable.courseId, courseId))
+      .orderBy(modulesTable.order);
+
+    const modules = await Promise.all(
+      modulesRaw.map(async (mod) => {
+        const lessons = await db
+          .select({
+            id: lessonsTable.id,
+            title: lessonsTable.title,
+            titleAr: lessonsTable.titleAr,
+            type: lessonsTable.type,
+            videoUrl: lessonsTable.videoUrl,
+            pdfUrl: lessonsTable.pdfUrl,
+            duration: lessonsTable.duration,
+            order: lessonsTable.order,
+          })
+          .from(lessonsTable)
+          .where(eq(lessonsTable.moduleId, mod.id))
+          .orderBy(lessonsTable.order);
+
+        return {
+          id: mod.id,
+          title: mod.title,
+          titleAr: mod.titleAr ?? null,
+          order: mod.order,
+          lessons,
+        };
+      })
+    );
+
+    // جيب الجلسات لو كورس مباشر
+    const sessions = course.courseType === "live"
+      ? await db
+          .select()
+          .from(courseSessionsTable)
+          .where(eq(courseSessionsTable.courseId, courseId))
+          .orderBy(courseSessionsTable.scheduledAt)
+      : [];
 
     res.json({
       id: course.id,
@@ -107,7 +145,9 @@ router.get("/courses/:id", async (req, res) => {
       totalHours: course.totalHours ? Number(course.totalHours) : null,
       isFeatured: course.isFeatured ?? false,
       studentCount: studentCount?.count ?? 0,
-      moduleCount: moduleCount?.count ?? 0,
+      moduleCount: modules.length,
+      modules,
+      sessions,
     });
   } catch (err) {
     res.status(500).json({ error: "Internal server error" });

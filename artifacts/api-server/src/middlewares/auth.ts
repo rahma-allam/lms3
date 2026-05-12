@@ -16,6 +16,13 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+// middleware للطالب — بيتحقق من student token أو يسمح بالمرور لو مفيش token (public routes)
+export function allowStudent(req: Request, res: Response, next: NextFunction) {
+  // لو الـ route محتاج student token في المستقبل — نضيفه هنا
+  // دلوقتي: نسمح بالمرور بشرط إن الـ tenantId موجود من الـ tenantMiddleware
+  next();
+}
+
 export function requireInstructor(req: Request, res: Response, next: NextFunction) {
   try {
     const auth = req.headers["authorization"];

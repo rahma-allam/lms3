@@ -16,7 +16,7 @@ import certificatesRouter from "./certificates";
 import couponsRouter from "./coupons";
 import adminAuthRouter from "./admin-auth";
 import instructorAuthRouter from "./instructor-auth";
-import { requireAdmin, requireInstructor } from "../middlewares/auth.js";
+import { requireAdmin, requireInstructor, allowStudent } from "../middlewares/auth.js";
 import { db, settingsTable, tenantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -81,6 +81,10 @@ router.use("/admin", requireAdmin, adminRouter);
 router.use("/dashboard", requireAdmin, dashboardRouter);
 router.use("/courses", requireAdmin, coursesRouter);
 router.use("/modules", requireAdmin, lessonsRouter);
+// الطالب محتاج يكمّل درس ويشوف تقدمه
+router.use("/lessons/:id/complete", allowStudent, lessonsRouter);
+router.use("/lessons/:id/progress", allowStudent, lessonsRouter);
+// باقي الـ lessons محمية بـ requireAdmin
 router.use("/lessons", requireAdmin, lessonsRouter);
 router.use("/students", requireAdmin, studentsRouter);
 // upload-receipt: public — الطالب بيرفع إيصاله بدون admin token
@@ -88,6 +92,11 @@ router.post("/payments/upload-receipt", paymentsRouter);
 // باقي الـ payments محمية بـ requireAdmin
 router.use("/payments", requireAdmin, paymentsRouter);
 router.use("/settings", requireAdmin, settingsRouter);
+// الطالب محتاج يقرأ الاختبار ويجاوب ويشوف نتيجته
+router.use("/quizzes/lesson", allowStudent, quizzesRouter);
+router.use("/quizzes/:quizId/submit", allowStudent, quizzesRouter);
+router.use("/quizzes/:quizId/attempts", allowStudent, quizzesRouter);
+// إنشاء/تعديل/حذف الاختبارات — admin فقط
 router.use("/quizzes", requireAdmin, quizzesRouter);
 router.use("/enrollments", requireAdmin, enrollmentsRouter);
 router.use("/categories", requireAdmin, categoriesRouter);

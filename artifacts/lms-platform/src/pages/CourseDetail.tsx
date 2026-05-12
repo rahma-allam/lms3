@@ -118,7 +118,7 @@ function QuizManagerDialog({ lessonId, open, onClose }: { lessonId: number; open
   const { data: existingQuiz, refetch: refetchQuiz } = useQuery<any>({
     queryKey: ["quiz-lesson", lessonId],
     queryFn: async () => {
-      const res = await fetch(`/api/quizzes/lesson/${lessonId}`);
+      const res = await fetchWithAuth(`/api/quizzes/lesson/${lessonId}`);
       if (res.status === 404) return null;
       if (!res.ok) throw new Error();
       return res.json();
@@ -152,9 +152,8 @@ function QuizManagerDialog({ lessonId, open, onClose }: { lessonId: number; open
         passingScore,
         questions: questions.map((q, i) => ({ ...q, order: i })),
       };
-      const res = await fetch(`/api/quizzes/lesson/${lessonId}`, {
+      const res = await fetchWithAuth(`/api/quizzes/lesson/${lessonId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Failed to save quiz");
@@ -173,7 +172,7 @@ function QuizManagerDialog({ lessonId, open, onClose }: { lessonId: number; open
     if (!existingQuiz) return;
     setSaving(true);
     try {
-      await fetch(`/api/quizzes/${existingQuiz.id}`, { method: "DELETE" });
+      await fetchWithAuth(`/api/quizzes/${existingQuiz.id}`, { method: "DELETE" });
       toast.success("تم حذف الاختبار");
       await refetchQuiz();
     } catch {
@@ -500,8 +499,11 @@ export default function CourseDetail() {
     try {
       const formData = new FormData();
       formData.append("pdf", file);
-      const res = await fetch(`/api/lessons/${lessonId}/upload-pdf`, {
+      const token = localStorage.getItem("lms_admin_token");
+      const tenant = localStorage.getItem("tenant_slug");
+      const res = await fetch(`/api/lessons/${lessonId}/upload-pdf?tenant=${tenant ?? ""}`, {
         method: "POST",
+        headers: { Authorization: `Bearer ${token ?? ""}` },
         body: formData,
       });
       if (!res.ok) throw new Error();
