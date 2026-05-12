@@ -83,6 +83,9 @@ router.use("/courses", requireAdmin, coursesRouter);
 router.use("/modules", requireAdmin, lessonsRouter);
 router.use("/lessons", requireAdmin, lessonsRouter);
 router.use("/students", requireAdmin, studentsRouter);
+// upload-receipt: public — الطالب بيرفع إيصاله بدون admin token
+router.post("/payments/upload-receipt", paymentsRouter);
+// باقي الـ payments محمية بـ requireAdmin
 router.use("/payments", requireAdmin, paymentsRouter);
 router.use("/settings", requireAdmin, settingsRouter);
 router.use("/quizzes", requireAdmin, quizzesRouter);

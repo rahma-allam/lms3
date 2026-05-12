@@ -23,6 +23,7 @@ import {
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { fetchWithAuth } from "@/lib/fetchWithAuth";
 
 const lessonIcons: Record<string, React.ReactNode> = {
   video: <Video className="w-3.5 h-3.5 text-blue-500" />,
@@ -425,11 +426,16 @@ export default function CourseDetail() {
 
     try {
       // ── 1. اطلب signature من السيرفر ──────────────────────────────────
-      const sigRes = await fetch(`/api/lessons/${lessonId}/upload-video-signature`, {
+      const sigRes = await fetchWithAuth(`/api/lessons/${lessonId}/upload-video-signature`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("lms_admin_token") ?? ""}` },
       });
-      if (!sigRes.ok) throw new Error("فشل الحصول على صلاحية الرفع");
+      if (!sigRes.ok) {
+        const errBody = await sigRes.json().catch(() => ({}));
+        const msg = errBody?.detail 
+          ? `${errBody.error}: ${errBody.detail}` 
+          : errBody?.error || `فشل الحصول على صلاحية الرفع (${sigRes.status})`;
+        throw new Error(msg);
+      }
       const sig = await sigRes.json();
 
       // ── 2. ارفع مباشرةً لـ Cloudinary بدون ما تعدي على السيرفر ────────
@@ -454,18 +460,20 @@ export default function CourseDetail() {
             const videoUrl: string = result.secure_url;
 
             // ── 3. أبلغ السيرفر بالـ URL عشان يحفظه في الـ DB ───────────
-            const confirmRes = await fetch(`/api/lessons/${lessonId}/confirm-video`, {
+            const confirmRes = await fetchWithAuth(`/api/lessons/${lessonId}/confirm-video`, {
               method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${localStorage.getItem("lms_admin_token") ?? ""}`,
-              },
               body: JSON.stringify({ videoUrl }),
             });
             if (!confirmRes.ok) { reject(new Error("فشل حفظ رابط الفيديو")); return; }
             resolve();
           } else {
-            reject(new Error("فشل رفع الفيديو على Cloudinary"));
+            // نقرأ الـ error الحقيقي من Cloudinary عشان نعرف السبب
+            let cloudErr = "فشل رفع الفيديو على Cloudinary";
+            try {
+              const errBody = JSON.parse(xhr.responseText);
+              cloudErr = errBody?.error?.message || cloudErr;
+            } catch { /* ignore */ }
+            reject(new Error(cloudErr));
           }
         };
         xhr.onerror = () => reject(new Error("فشل الاتصال بـ Cloudinary"));

@@ -1,5 +1,4 @@
 import { v2 as cloudinary } from "cloudinary";
-import crypto from "crypto";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME!,
@@ -12,23 +11,20 @@ export { cloudinary };
 
 // ─── توليد signature للرفع المباشر من المتصفح ────────────────────────────
 // المتصفح يرفع مباشرةً لـ Cloudinary بدون ما يعدي على السيرفر
+// نستخدم الـ SDK مباشرةً بدل ما نحسب الـ signature يدوياً
 export function generateUploadSignature(folder: string, resourceType: "video" | "image" | "raw") {
   const timestamp = Math.floor(Date.now() / 1000);
-  const params: Record<string, string | number> = {
+
+  const paramsToSign: Record<string, string | number> = {
     folder,
     timestamp,
   };
 
-  // رتب الـ params أبجدياً وادمجهم
-  const toSign = Object.keys(params)
-    .sort()
-    .map((k) => `${k}=${params[k]}`)
-    .join("&");
-
-  const signature = crypto
-    .createHash("sha256")
-    .update(toSign + process.env.CLOUDINARY_API_SECRET!)
-    .digest("hex");
+  // api_sign_request بتتولى الـ algorithm والترتيب والـ hashing تلقائياً
+  const signature = cloudinary.utils.api_sign_request(
+    paramsToSign,
+    process.env.CLOUDINARY_API_SECRET!
+  );
 
   return {
     signature,

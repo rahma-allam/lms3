@@ -2,9 +2,8 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { lessonsTable, modulesTable, coursesTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
-import { generateUploadSignature, deleteFromCloudinary, extractPublicId } from "../lib/cloudinary";
+import { generateUploadSignature, deleteFromCloudinary, extractPublicId, uploadToCloudinary } from "../lib/cloudinary.js";
 import multer from "multer";
-import { uploadToCloudinary } from "../lib/cloudinary";
 
 const router = Router();
 
@@ -104,63 +103,6 @@ router.post("/:moduleId/lessons", async (req, res) => {
   }
 });
 
-// PUT /api/lessons/:id
-router.put("/:id", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id!);
-    const { title, titleAr, type, videoUrl, pdfUrl, content, duration, order } = req.body;
-
-    const [lesson] = await db
-      .update(lessonsTable)
-      .set({
-        title, titleAr: titleAr ?? null, type,
-        videoUrl: videoUrl ?? null, pdfUrl: pdfUrl ?? null,
-        content: content ?? null, duration: duration ?? null, order,
-      })
-      .where(eq(lessonsTable.id, id))
-      .returning();
-
-    if (!lesson) return res.status(404).json({ error: "Lesson not found" });
-
-    res.json({
-      id: lesson.id, moduleId: lesson.moduleId, title: lesson.title,
-      titleAr: lesson.titleAr ?? null, type: lesson.type,
-      videoUrl: lesson.videoUrl ?? null, pdfUrl: lesson.pdfUrl ?? null,
-      content: lesson.content ?? null, duration: lesson.duration ?? null,
-      order: lesson.order,
-    });
-  } catch (err) {
-    req.log.error({ err }, "Error updating lesson");
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// DELETE /api/lessons/:id
-router.delete("/:id", async (req, res) => {
-  try {
-    const id = parseInt(req.params.id!);
-
-    // تحقق من tenant قبل الحذف
-    const lesson = await getLessonWithTenantCheck(id, req.tenantId);
-    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية حذفه" });
-
-    // احذف الفيديو والـ PDF من Cloudinary لو موجودين
-    if (lesson?.videoUrl && !lesson.videoUrl.startsWith("local:")) {
-      const publicId = extractPublicId(lesson.videoUrl);
-      if (publicId) await deleteFromCloudinary(publicId, "video");
-    }
-    if (lesson?.pdfUrl && !lesson.pdfUrl.startsWith("local:")) {
-      const publicId = extractPublicId(lesson.pdfUrl);
-      if (publicId) await deleteFromCloudinary(publicId, "raw");
-    }
-
-    await db.delete(lessonsTable).where(eq(lessonsTable.id, id));
-    res.status(204).send();
-  } catch (err) {
-    req.log.error({ err }, "Error deleting lesson");
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
 
 // ══════════════════════════════════════════════════════════════════════════
 // الـ routes الجديدة للحماية
@@ -178,7 +120,10 @@ router.post("/:id/upload-video-signature", async (req, res) => {
     res.json(signature);
   } catch (err: any) {
     req.log.error({ err }, "Error generating upload signature");
-    res.status(500).json({ error: "فشل توليد رابط الرفع" });
+    res.status(500).json({ 
+      error: "فشل توليد رابط الرفع",
+      detail: err?.message ?? String(err),
+    });
   }
 });
 
@@ -372,5 +317,67 @@ router.post("/:id/pdf-signed-url", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch PDF URL" });
   }
 });
+
+
+// PUT /api/lessons/:id
+router.put("/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id!);
+    const { title, titleAr, type, videoUrl, pdfUrl, content, duration, order } = req.body;
+
+    const [lesson] = await db
+      .update(lessonsTable)
+      .set({
+        title, titleAr: titleAr ?? null, type,
+        videoUrl: videoUrl ?? null, pdfUrl: pdfUrl ?? null,
+        content: content ?? null, duration: duration ?? null, order,
+      })
+      .where(eq(lessonsTable.id, id))
+      .returning();
+
+    if (!lesson) return res.status(404).json({ error: "Lesson not found" });
+
+    res.json({
+      id: lesson.id, moduleId: lesson.moduleId, title: lesson.title,
+      titleAr: lesson.titleAr ?? null, type: lesson.type,
+      videoUrl: lesson.videoUrl ?? null, pdfUrl: lesson.pdfUrl ?? null,
+      content: lesson.content ?? null, duration: lesson.duration ?? null,
+      order: lesson.order,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Error updating lesson");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// DELETE /api/lessons/:id
+
+// DELETE /api/lessons/:id
+router.delete("/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id!);
+
+    // تحقق من tenant قبل الحذف
+    const lesson = await getLessonWithTenantCheck(id, req.tenantId);
+    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية حذفه" });
+
+    // احذف الفيديو والـ PDF من Cloudinary لو موجودين
+    if (lesson?.videoUrl && !lesson.videoUrl.startsWith("local:")) {
+      const publicId = extractPublicId(lesson.videoUrl);
+      if (publicId) await deleteFromCloudinary(publicId, "video");
+    }
+    if (lesson?.pdfUrl && !lesson.pdfUrl.startsWith("local:")) {
+      const publicId = extractPublicId(lesson.pdfUrl);
+      if (publicId) await deleteFromCloudinary(publicId, "raw");
+    }
+
+    await db.delete(lessonsTable).where(eq(lessonsTable.id, id));
+    res.status(204).send();
+  } catch (err) {
+    req.log.error({ err }, "Error deleting lesson");
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 
 export default router;
