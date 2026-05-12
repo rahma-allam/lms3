@@ -3,27 +3,15 @@ import { db } from "@workspace/db";
 import { paymentsTable, studentsTable, coursesTable, activityTable, settingsTable, enrollmentsTable, tenantsTable } from "@workspace/db";
 import { eq, sql, and } from "drizzle-orm";
 import { CreatePaymentBody } from "@workspace/api-zod";
-import crypto from "crypto";
-import path from "path";
-import fs from "fs";
 import multer from "multer";
+import { uploadToCloudinary, deleteFromCloudinary, extractPublicId } from "../lib/cloudinary.js";
 import { firePurchaseConversions } from "../lib/conversionApi.js";
 
 const router = Router();
 
-// ─── مجلد تخزين إيصالات الدفع ────────────────────────────────────────────
-const RECEIPTS_DIR = path.join(process.cwd(), "private-receipts");
-if (!fs.existsSync(RECEIPTS_DIR)) fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
-
-const receiptStorage = multer.diskStorage({
-  destination: RECEIPTS_DIR,
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${crypto.randomUUID()}${ext}`);
-  },
-});
+// ─── multer: memory storage ثم رفع على Cloudinary ────────────────────────
 const uploadReceipt = multer({
-  storage: receiptStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype.startsWith("image/")) cb(null, true);
@@ -281,28 +269,26 @@ router.post("/upload-receipt", uploadReceipt.single("receipt"), async (req, res)
     if (!req.file) {
       return res.status(400).json({ error: "No receipt image provided" });
     }
-    const receiptUrl = `/api/payments/receipts/${req.file.filename}`;
-    res.json({ receiptUrl, filename: req.file.filename });
+
+    // ارفع الصورة على Cloudinary مباشرةً
+    const result = await uploadToCloudinary(req.file.buffer, {
+      folder: "lms/receipts",
+      resource_type: "image",
+    });
+
+    res.json({ receiptUrl: result.secure_url, publicId: result.public_id });
   } catch (err: any) {
     req.log.error({ err }, "Error uploading receipt");
     res.status(500).json({ error: err.message || "Upload failed" });
   }
 });
 
-// 6. عرض إيصال الدفع
+// 6. عرض إيصال الدفع — الإيصالات دلوقتي على Cloudinary مباشرةً
+// هذا الـ endpoint للـ backward compatibility مع الإيصالات القديمة المحفوظة محلياً
 router.get("/receipts/:filename", async (req, res) => {
-  try {
-    const { filename } = req.params;
-    const filePath = path.join(RECEIPTS_DIR, filename!);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "Receipt not found" });
-    }
-    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
-    fs.createReadStream(filePath).pipe(res);
-  } catch (err) {
-    req.log.error({ err }, "Error serving receipt");
-    res.status(500).json({ error: "Internal server error" });
-  }
+  res.status(410).json({ 
+    error: "الإيصالات القديمة انتقلت إلى Cloudinary. الإيصالات الجديدة عندها URL مباشر." 
+  });
 });
 
 // 7. تحديث حالة الدفع (من قبل الأدمن)

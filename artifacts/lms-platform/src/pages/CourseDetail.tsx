@@ -82,28 +82,14 @@ function ProtectedMeetingLink({ zoomLink, zoomPassword, scheduledAt, durationMin
 
 // ─── مكون رفع فيديو محمي ──────────────────────────────────────────────────
 function ProtectedVideoPlayer({ lessonId, videoUrl }: { lessonId: number; videoUrl: string | null }) {
-  const [tokenUrl, setTokenUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [show, setShow] = useState(false);
 
-  const getSignedUrl = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/lessons/${lessonId}/signed-url`, { method: "POST" });
-      if (!res.ok) throw new Error();
-      const { url } = await res.json();
-      setTokenUrl(url);
-    } catch {
-      toast.error("فشل تحميل الفيديو");
-    } finally {
-      setLoading(false);
-    }
-  };
+  if (!videoUrl) return <span className="text-xs text-muted-foreground">لا يوجد فيديو بعد</span>;
 
-  if (!videoUrl) return <span className="text-xs text-muted-foreground">لا يوجد فيديو</span>;
-
-  return tokenUrl ? (
+  // Cloudinary URL مباشر — نعرضه مباشرةً بدون signed-url
+  return show ? (
     <video
-      src={tokenUrl}
+      src={videoUrl}
       controls
       controlsList="nodownload"
       onContextMenu={(e) => e.preventDefault()}
@@ -111,12 +97,11 @@ function ProtectedVideoPlayer({ lessonId, videoUrl }: { lessonId: number; videoU
     />
   ) : (
     <button
-      onClick={getSignedUrl}
-      disabled={loading}
+      onClick={() => setShow(true)}
       className="mt-1 flex items-center gap-1.5 text-xs text-primary hover:underline"
     >
       <Video className="w-3 h-3" />
-      {loading ? "جاري التحميل..." : "مشاهدة الفيديو"}
+      مشاهدة الفيديو
     </button>
   );
 }
@@ -350,6 +335,7 @@ export default function CourseDetail() {
   const [sessionDialog, setSessionDialog] = useState(false);
   const [videoUploadLesson, setVideoUploadLesson] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   // Feature 5: Quiz management
   const [quizLesson, setQuizLesson] = useState<number | null>(null);
   // PDF upload
@@ -435,24 +421,72 @@ export default function CourseDetail() {
   // رفع فيديو مباشرة للسيرفر
   const handleVideoUpload = async (lessonId: number, file: File) => {
     setUploading(true);
-    try {
-      const formData = new FormData();
-      formData.append("video", file);
-      const res = await fetch(`/api/lessons/${lessonId}/upload-video`, {
-        method: "POST",
-        body: formData,
-      });
-      if (!res.ok) throw new Error();
-      qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
-      toast.success("تم رفع الفيديو بنجاح");
-      setVideoUploadLesson(null);
-    } catch {
-      toast.error("فشل رفع الفيديو");
-    } finally {
-      setUploading(false);
-    }
-  };
+    setUploadProgress(0);
 
+    try {
+      // ── 1. اطلب signature من السيرفر ──────────────────────────────────
+      const sigRes = await fetch(`/api/lessons/${lessonId}/upload-video-signature`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("lms_admin_token") ?? ""}` },
+      });
+      if (!sigRes.ok) throw new Error("فشل الحصول على صلاحية الرفع");
+      const sig = await sigRes.json();
+
+      // ── 2. ارفع مباشرةً لـ Cloudinary بدون ما تعدي على السيرفر ────────
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("api_key", sig.api_key);
+      formData.append("timestamp", sig.timestamp);
+      formData.append("signature", sig.signature);
+      formData.append("folder", sig.folder);
+
+      const cloudinaryUrl = `https://api.cloudinary.com/v1_1/${sig.cloud_name}/video/upload`;
+
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", cloudinaryUrl);
+        xhr.upload.addEventListener("progress", (e) => {
+          if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
+        });
+        xhr.onload = async () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const result = JSON.parse(xhr.responseText);
+            const videoUrl: string = result.secure_url;
+
+            // ── 3. أبلغ السيرفر بالـ URL عشان يحفظه في الـ DB ───────────
+            const confirmRes = await fetch(`/api/lessons/${lessonId}/confirm-video`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${localStorage.getItem("lms_admin_token") ?? ""}`,
+              },
+              body: JSON.stringify({ videoUrl }),
+            });
+            if (!confirmRes.ok) { reject(new Error("فشل حفظ رابط الفيديو")); return; }
+            resolve();
+          } else {
+            reject(new Error("فشل رفع الفيديو على Cloudinary"));
+          }
+        };
+        xhr.onerror = () => reject(new Error("فشل الاتصال بـ Cloudinary"));
+        xhr.send(formData);
+      });
+
+      setUploadProgress(100);
+      setTimeout(() => {
+        setUploading(false);
+        setUploadProgress(0);
+        qc.invalidateQueries({ queryKey: getGetCourseQueryKey(courseId) });
+        toast.success("تم رفع الفيديو بنجاح ✅");
+        setVideoUploadLesson(null);
+      }, 500);
+
+    } catch (err: any) {
+      setUploading(false);
+      setUploadProgress(0);
+      toast.error(err.message || "فشل رفع الفيديو");
+    }
+  }
   const handlePdfUpload = async (lessonId: number, file: File) => {
     setUploading(true);
     try {
@@ -935,7 +969,19 @@ export default function CourseDetail() {
               />
             </label>
             {uploading && (
-              <div className="text-center text-sm text-primary animate-pulse">جاري الرفع...</div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span className="animate-pulse">جاري الرفع على Cloudinary...</span>
+                  <span className="font-mono font-bold text-primary">{uploadProgress}%</span>
+                </div>
+                <div className="w-full bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-2 bg-primary rounded-full transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-muted-foreground text-center">لا تغلق هذه النافذة أثناء الرفع</p>
+              </div>
             )}
           </div>
         </DialogContent>

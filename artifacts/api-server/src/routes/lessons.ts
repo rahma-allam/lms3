@@ -1,99 +1,38 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { lessonsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
-import crypto from "crypto";
-import path from "path";
-import fs from "fs";
+import { lessonsTable, modulesTable, coursesTable } from "@workspace/db";
+import { eq, and } from "drizzle-orm";
+import { generateUploadSignature, deleteFromCloudinary, extractPublicId } from "../lib/cloudinary";
 import multer from "multer";
+import { uploadToCloudinary } from "../lib/cloudinary";
 
 const router = Router();
 
-// ─── مجلد تخزين الفيديوهات خارج الـ public ──────────────────────────────
-const VIDEOS_DIR = path.join(process.cwd(), "private-videos");
-if (!fs.existsSync(VIDEOS_DIR)) fs.mkdirSync(VIDEOS_DIR, { recursive: true });
-
-// ─── multer config ────────────────────────────────────────────────────────
-const storage = multer.diskStorage({
-  destination: VIDEOS_DIR,
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${crypto.randomUUID()}${ext}`);
-  },
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2GB
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith("video/")) cb(null, true);
-    else cb(new Error("ملفات الفيديو فقط مسموح بها"));
-  },
-});
-
-// ─── signed tokens في الذاكرة (استبدليها بـ Redis في Production) ─────────
-const signedTokens = new Map<string, { lessonId: number; expiresAt: number }>();
-
-// ══════════════════════════════════════════════════════════════════════════
-// ⚠️ routes الـ stream لازم تجي الأول قبل /:id عشان ما يتعارضوش
-// ══════════════════════════════════════════════════════════════════════════
-
-// GET /api/lessons/stream/:token — تشغيل الفيديو بالـ token
-router.get("/stream/:token", async (req, res) => {
-  const { token } = req.params;
-  const tokenData = signedTokens.get(token!);
-
-  if (!tokenData || Date.now() > tokenData.expiresAt) {
-    signedTokens.delete(token!);
-    return res.status(403).json({ error: "الرابط منتهي الصلاحية" });
-  }
-
-  const [lesson] = await db
-    .select()
+// ─── helper: تحقق أن الـ lesson ينتمي لـ tenant معين ────────────────────
+// lesson → module → course → tenant
+async function getLessonWithTenantCheck(lessonId: number, tenantId: number | undefined) {
+  const rows = await db
+    .select({ lesson: lessonsTable, tenantId: coursesTable.tenantId })
     .from(lessonsTable)
-    .where(eq(lessonsTable.id, tokenData.lessonId));
+    .innerJoin(modulesTable, eq(lessonsTable.moduleId, modulesTable.id))
+    .innerJoin(coursesTable, eq(modulesTable.courseId, coursesTable.id))
+    .where(eq(lessonsTable.id, lessonId));
 
-  if (!lesson?.videoUrl?.startsWith("local:")) {
-    return res.status(404).json({ error: "الفيديو غير موجود" });
-  }
+  const row = rows[0];
+  if (!row) return null; // الدرس مش موجود
 
-  const filename = lesson.videoUrl.replace("local:", "");
-  const filePath = path.join(VIDEOS_DIR, filename);
+  // لو tenantId موجود في الـ request تحقق منه — لو مش موجود اسمح (dev/fallback)
+  if (tenantId !== undefined && row.tenantId !== tenantId) return null;
 
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "ملف الفيديو غير موجود على السيرفر" });
-  }
+  return row.lesson;
+}
 
-  const stat = fs.statSync(filePath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
 
-  // دعم Range requests عشان الفيديو يشتغل بشكل صح في الـ browser
-  if (range) {
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0]!, 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunkSize = end - start + 1;
 
-    res.writeHead(206, {
-      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-      "Accept-Ranges": "bytes",
-      "Content-Length": chunkSize,
-      "Content-Type": "video/mp4",
-      "Cache-Control": "no-store, no-cache",
-      "Content-Disposition": "inline",
-    });
-
-    fs.createReadStream(filePath, { start, end }).pipe(res);
-  } else {
-    res.writeHead(200, {
-      "Content-Length": fileSize,
-      "Content-Type": "video/mp4",
-      "Cache-Control": "no-store, no-cache",
-      "Content-Disposition": "inline",
-    });
-    fs.createReadStream(filePath).pipe(res);
-  }
-});
+// ══════════════════════════════════════════════════════════════════════════
+// ملاحظة: بعد Cloudinary مفيش حاجة اسمها stream/:token
+// الفيديو بيتشال مباشرةً من رابط Cloudinary المحفوظ في videoUrl
+// ══════════════════════════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════════════════════
 // الـ routes الأصلية (موجودة قبل كده)
@@ -201,11 +140,18 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = parseInt(req.params.id!);
 
-    // لو فيه فيديو محلي امسحه مع الدرس
-    const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, id));
-    if (lesson?.videoUrl?.startsWith("local:")) {
-      const filePath = path.join(VIDEOS_DIR, lesson.videoUrl.replace("local:", ""));
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    // تحقق من tenant قبل الحذف
+    const lesson = await getLessonWithTenantCheck(id, req.tenantId);
+    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية حذفه" });
+
+    // احذف الفيديو والـ PDF من Cloudinary لو موجودين
+    if (lesson?.videoUrl && !lesson.videoUrl.startsWith("local:")) {
+      const publicId = extractPublicId(lesson.videoUrl);
+      if (publicId) await deleteFromCloudinary(publicId, "video");
+    }
+    if (lesson?.pdfUrl && !lesson.pdfUrl.startsWith("local:")) {
+      const publicId = extractPublicId(lesson.pdfUrl);
+      if (publicId) await deleteFromCloudinary(publicId, "raw");
     }
 
     await db.delete(lessonsTable).where(eq(lessonsTable.id, id));
@@ -220,59 +166,68 @@ router.delete("/:id", async (req, res) => {
 // الـ routes الجديدة للحماية
 // ══════════════════════════════════════════════════════════════════════════
 
-// POST /api/lessons/:id/upload-video — رفع فيديو
-router.post("/:id/upload-video", upload.single("video"), async (req, res) => {
+// POST /api/lessons/:id/upload-video-signature — يولد signature للرفع المباشر من المتصفح
+// المتصفح يرفع مباشرةً لـ Cloudinary بدون ما الفيديو يعدي على السيرفر
+router.post("/:id/upload-video-signature", async (req, res) => {
   try {
-    const lessonId = parseInt(req.params.id as string);
+    const lessonId = parseInt(req.params.id!);
+    const lesson = await getLessonWithTenantCheck(lessonId, req.tenantId);
+    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية الوصول إليه" });
 
-    if (!req.file) {
-      return res.status(400).json({ error: "لم يتم إرسال ملف" });
-    }
-
-    const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, lessonId));
-    if (!lesson) {
-      fs.unlinkSync(req.file.path);
-      return res.status(404).json({ error: "الدرس غير موجود" });
-    }
-
-    // امسح الفيديو القديم لو موجود
-    if (lesson.videoUrl?.startsWith("local:")) {
-      const oldPath = path.join(VIDEOS_DIR, lesson.videoUrl.replace("local:", ""));
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-    }
-
-    await db
-      .update(lessonsTable)
-      .set({ videoUrl: `local:${req.file.filename}` })
-      .where(eq(lessonsTable.id, lessonId));
-
-    res.json({ success: true });
+    const signature = generateUploadSignature("lms/videos", "video");
+    res.json(signature);
   } catch (err: any) {
-    req.log.error({ err }, "Error uploading video");
-    res.status(500).json({ error: err.message || "فشل رفع الفيديو" });
+    req.log.error({ err }, "Error generating upload signature");
+    res.status(500).json({ error: "فشل توليد رابط الرفع" });
   }
 });
 
-// POST /api/lessons/:id/signed-url — إنشاء رابط مؤقت للفيديو
+// POST /api/lessons/:id/confirm-video — بعد ما المتصفح يرفع مباشرةً لـ Cloudinary يبعت الـ URL هنا
+router.post("/:id/confirm-video", async (req, res) => {
+  try {
+    const lessonId = parseInt(req.params.id!);
+    const { videoUrl } = req.body as { videoUrl: string };
+
+    if (!videoUrl?.startsWith("https://res.cloudinary.com/")) {
+      return res.status(400).json({ error: "رابط غير صالح" });
+    }
+
+    const lesson = await getLessonWithTenantCheck(lessonId, req.tenantId);
+    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية الوصول إليه" });
+
+    // احذف الفيديو القديم لو موجود
+    if (lesson.videoUrl && !lesson.videoUrl.startsWith("local:")) {
+      const oldPublicId = extractPublicId(lesson.videoUrl);
+      if (oldPublicId) await deleteFromCloudinary(oldPublicId, "video");
+    }
+
+    await db.update(lessonsTable).set({ videoUrl }).where(eq(lessonsTable.id, lessonId));
+    res.json({ success: true, videoUrl });
+  } catch (err: any) {
+    req.log.error({ err }, "Error confirming video");
+    res.status(500).json({ error: "فشل تأكيد الفيديو" });
+  }
+});
+
+// POST /api/lessons/:id/signed-url — الفيديو على Cloudinary مش محتاج signed-url
+// بس نحتفظ بالـ endpoint للـ backward compatibility
 router.post("/:id/signed-url", async (req, res) => {
   try {
     const lessonId = parseInt(req.params.id!);
+    const lesson = await getLessonWithTenantCheck(lessonId, req.tenantId);
 
-    const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, lessonId));
     if (!lesson?.videoUrl) {
       return res.status(404).json({ error: "الفيديو غير موجود" });
     }
 
-    const token = crypto.randomUUID();
-    const expiresAt = Date.now() + 30 * 60 * 1000; // 30 دقيقة
+    if (lesson.videoUrl.startsWith("local:")) {
+      return res.status(410).json({ error: "الفيديو القديم مش متاح، ارفعه مرة تانية" });
+    }
 
-    signedTokens.set(token, { lessonId, expiresAt });
-    setTimeout(() => signedTokens.delete(token), 30 * 60 * 1000);
-
-    res.json({ url: `/api/lessons/stream/${token}` });
+    res.json({ url: lesson.videoUrl });
   } catch (err) {
-    req.log.error({ err }, "Error creating signed URL");
-    res.status(500).json({ error: "فشل إنشاء الرابط" });
+    req.log.error({ err }, "Error fetching video URL");
+    res.status(500).json({ error: "فشل جلب رابط الفيديو" });
   }
 });
 
@@ -349,21 +304,11 @@ router.post("/:id/complete", async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
-// Feature 5A: PDF Upload for Lessons
+// Feature 5A: PDF Upload for Lessons — على Cloudinary
 // ══════════════════════════════════════════════════════════════════════════
 
-const PDFS_DIR = path.join(process.cwd(), "private-pdfs");
-if (!fs.existsSync(PDFS_DIR)) fs.mkdirSync(PDFS_DIR, { recursive: true });
-
-const pdfStorage = multer.diskStorage({
-  destination: PDFS_DIR,
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${crypto.randomUUID()}${ext}`);
-  },
-});
 const uploadPdf = multer({
-  storage: pdfStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
   fileFilter: (_req, file, cb) => {
     if (file.mimetype === "application/pdf") cb(null, true);
@@ -371,81 +316,60 @@ const uploadPdf = multer({
   },
 });
 
-// Signed tokens for PDF
-const pdfTokens = new Map<string, { lessonId: number; expiresAt: number }>();
-
-// GET /api/lessons/pdf/:token — serve PDF with signed token
-router.get("/pdf/:token", async (req, res) => {
-  const { token } = req.params;
-  const tokenData = pdfTokens.get(token!);
-
-  if (!tokenData || Date.now() > tokenData.expiresAt) {
-    pdfTokens.delete(token!);
-    return res.status(403).json({ error: "Link expired" });
-  }
-
-  const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, tokenData.lessonId));
-  if (!lesson?.pdfUrl?.startsWith("local:")) {
-    return res.status(404).json({ error: "PDF not found" });
-  }
-
-  const filename = lesson.pdfUrl.replace("local:", "");
-  const filePath = path.join(PDFS_DIR, filename);
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "PDF file not found on server" });
-  }
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", "inline");
-  fs.createReadStream(filePath).pipe(res);
+// GET /api/lessons/pdf/:token — لم يعد مطلوباً مع Cloudinary، نحتفظ به للـ backward compatibility
+router.get("/pdf/:token", (_req, res) => {
+  res.status(410).json({ error: "هذا الـ endpoint لم يعد مستخدماً، الـ PDF يُقرأ من رابط Cloudinary مباشرةً" });
 });
 
-// POST /api/lessons/:id/upload-pdf — upload PDF
+// POST /api/lessons/:id/upload-pdf — upload PDF على Cloudinary
 router.post("/:id/upload-pdf", uploadPdf.single("pdf"), async (req, res) => {
   try {
     const lessonId = parseInt(req.params.id as string);
     if (!req.file) return res.status(400).json({ error: "No file sent" });
 
-    const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, lessonId));
-    if (!lesson) {
-      fs.unlinkSync(req.file.path);
-      return res.status(404).json({ error: "Lesson not found" });
+    const lesson = await getLessonWithTenantCheck(lessonId, req.tenantId);
+    if (!lesson) return res.status(404).json({ error: "الدرس غير موجود أو لا تملك صلاحية الوصول إليه" });
+
+    // احذف الـ PDF القديم من Cloudinary
+    if (lesson.pdfUrl && !lesson.pdfUrl.startsWith("local:")) {
+      const oldPublicId = extractPublicId(lesson.pdfUrl);
+      if (oldPublicId) await deleteFromCloudinary(oldPublicId, "raw");
     }
 
-    // Delete old PDF if exists
-    if (lesson.pdfUrl?.startsWith("local:")) {
-      const oldPath = path.join(PDFS_DIR, lesson.pdfUrl.replace("local:", ""));
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-    }
+    const result = await uploadToCloudinary(req.file.buffer, {
+      folder: "lms/pdfs",
+      resource_type: "raw",
+    });
 
-    const pdfUrl = `local:${req.file.filename}`;
-    await db.update(lessonsTable).set({ pdfUrl, type: "pdf" }).where(eq(lessonsTable.id, lessonId));
+    await db.update(lessonsTable)
+      .set({ pdfUrl: result.secure_url, type: "pdf" })
+      .where(eq(lessonsTable.id, lessonId));
 
-    res.json({ success: true, pdfUrl });
+    res.json({ success: true, pdfUrl: result.secure_url });
   } catch (err: any) {
     req.log.error({ err }, "Error uploading PDF");
     res.status(500).json({ error: err.message || "Failed to upload PDF" });
   }
 });
 
-// POST /api/lessons/:id/pdf-signed-url — generate signed URL for PDF
+// POST /api/lessons/:id/pdf-signed-url — ارجع رابط Cloudinary مباشرةً
 router.post("/:id/pdf-signed-url", async (req, res) => {
   try {
     const lessonId = parseInt(req.params.id!);
-    const [lesson] = await db.select().from(lessonsTable).where(eq(lessonsTable.id, lessonId));
-    if (!lesson?.pdfUrl?.startsWith("local:")) {
+    const lesson = await getLessonWithTenantCheck(lessonId, req.tenantId);
+
+    if (!lesson?.pdfUrl) {
       return res.status(404).json({ error: "PDF not found" });
     }
 
-    const token = crypto.randomUUID();
-    const expiresAt = Date.now() + 30 * 60 * 1000;
-    pdfTokens.set(token, { lessonId, expiresAt });
-    setTimeout(() => pdfTokens.delete(token), 30 * 60 * 1000);
+    if (lesson.pdfUrl.startsWith("local:")) {
+      return res.status(410).json({ error: "الـ PDF القديم مش متاح، ارفعه مرة تانية" });
+    }
 
-    res.json({ url: `/api/lessons/pdf/${token}` });
+    res.json({ url: lesson.pdfUrl });
   } catch (err) {
-    req.log.error({ err }, "Error creating PDF signed URL");
-    res.status(500).json({ error: "Failed to create signed URL" });
+    req.log.error({ err }, "Error fetching PDF URL");
+    res.status(500).json({ error: "Failed to fetch PDF URL" });
   }
 });
 

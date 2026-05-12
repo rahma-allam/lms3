@@ -33,6 +33,9 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3000",
         changeOrigin: true,
+        // رفع الفيديو ممكن ياخد وقت طويل — نرفع الـ timeout لـ 30 دقيقة
+        timeout: 30 * 60 * 1000,
+        proxyTimeout: 30 * 60 * 1000,
       },
     },
   },
